@@ -1,6 +1,6 @@
 # Advanced Database Systems Portfolio — MIT 8103
 
-**Student:** Anjola
+**Student:** Yaro Rukayat
 **Case study:** Corridor Pay (fictional cross-border B2B payments platform)
 
 ## 1. Case Study Statement
