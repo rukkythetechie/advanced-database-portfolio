@@ -1,0 +1,5 @@
+ I opened the Docker Desktop app and expanded my advanced-database-portfolio project to see the two database containers in it. I selected the PostgreSQL container, corridor-pg, and opened the Exec tab.
+
+There, I entered the command psql -U corridor -d corridorpay to connect to the database. Once connected, I ran SELECT current_database(); to check which database I was using. It returned corridorpay, which confirmed I was connected to the right database.
+
+And I saved a screenshot of the result as evidence.
