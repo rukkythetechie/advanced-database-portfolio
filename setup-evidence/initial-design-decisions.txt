@@ -1,0 +1,26 @@
+Corridor Pay: Initial Database Design Decisions
+12 October 2026
+
+Overview
+Corridor Pay is a fintech company that helps small and mid-sized businesses pay suppliers across borders. It operates in Nigeria, Canada, the United Kingdom and the United States.
+
+Wallet ownership and currency
+A business may possess multiple wallets. Each wallet is associated with a single business and holds a specific currency. Each business may have only one wallet per currency. A business may maintain separate NGN, CAD, GBP, and USD wallets, but cannot possess multiple wallets in the same currency. This constraint is an intentional scope decision to simplify balance management and payment processing. The use of separate wallets for distinct spending purposes is excluded from the current prototype and may be considered in future iterations.
+
+Identifiers and relationships
+Each business and wallet will have a unique ID. A wallet will reference its owner through business_id. The combination of business_id and currency_code will be unique, preventing duplicate wallets in the same currency for one business.
+
+Double-entry ledger
+The database design will incorporate ledger accounts, ledger transactions, and ledger entries to document all monetary movements. Each posted ledger transaction must maintain equal total debits and credits within each currency.
+
+Wallet balance updates and corresponding ledger entries will be recorded within a single database transaction to ensure atomicity; all changes will either succeed collectively or fail entirely. Reversals will generate linked compensating entries instead of modifying original posted entries.
+
+Payout tracking
+Payouts will utilize the statuses: pending, processing, completed, failed, and reversed. Permitted status transitions will be explicitly defined to prevent invalid state changes.
+
+A payment status history table will record each status change, its timestamp, the user or system that triggered the change, and the associated reason.
+
+A pending payout will not deduct funds. During processing, funds will be transferred from the business’s wallet liability account to a payment clearing account. Completion will record settlement in the ledger. A failure occurring before deduction will not require a reversal. If previously deducted funds are returned, a linked reversal ledger transaction will document the return, and the payout status will be updated to reversed.
+
+Current progress
+These are initial design decisions. The remaining table designs, relationships and enforcement rules are still being developed. No database tables have been implemented yet.
