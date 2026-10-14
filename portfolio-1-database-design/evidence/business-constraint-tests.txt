@@ -1,0 +1,58 @@
+Corridor Pay — Business Table Constraint Tests
+Date: 14 October 2026
+Database: corridorpay
+PostgreSQL: 16.15
+
+Tests were run inside a transaction. Savepoints allowed testing
+to continue after expected errors. A final rollback removed
+the test records.
+
+1. Valid business insert and defaults
+Observed: business_id = 1, kyb_status = pending, and created_at
+was populated. PostgreSQL returned INSERT 0 1.
+Result: Passed.
+
+2. Unsupported country
+Input: country_code = FR.
+Observed:
+ERROR: new row for relation "business" violates check constraint "business_country_check"
+Result: Passed — unsupported country rejected.
+
+3. Duplicate registration within one country
+Input: country_code = NG, registration_number = TEST-NG-001.
+Observed:
+ERROR: duplicate key value violates unique constraint "business_registration_unique"
+DETAIL: Key (country_code, registration_number)=(NG, TEST-NG-001) already exists.
+Result: Passed — duplicate combination rejected.
+
+4. Same registration number in another country
+Input: country_code = CA, registration_number = TEST-NG-001.
+Observed: business_id = 4, country_code = CA,
+registration_number = TEST-NG-001. PostgreSQL returned INSERT 0 1.
+Result: Passed — different country combination accepted.
+
+5. Invalid verification status
+Input: kyb_status = verified.
+Observed:
+ERROR: new row for relation "business" violates check constraint "business_kyb_status_check"
+Result: Passed — unsupported status rejected.
+
+6. Missing required business name
+Input: business_name = NULL.
+Observed:
+ERROR: null value in column "business_name" of relation "business" violates not-null constraint
+Result: Passed — missing name rejected.
+
+7. Final rollback
+Command: ROLLBACK;
+Observed: ROLLBACK.
+
+Verification:
+SELECT COUNT(*) AS business_count FROM business;
+Observed: business_count = 0.
+Result: Passed — test records removed.
+
+Notes
+- Generated IDs had gaps because failed inserts consumed identity values.
+- These tests confirm the specific cases above, not every possible input.
+- The Business table remained after rollback.
