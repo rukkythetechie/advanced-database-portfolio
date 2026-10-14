@@ -1,0 +1,16 @@
+Table "public.business"
+       Column        |           Type           | Collation | Nullable |           Default            
+---------------------+--------------------------+-----------+----------+------------------------------
+ business_id         | bigint                   |           | not null | generated always as identity
+ business_name       | text                     |           | not null | 
+ country_code        | text                     |           | not null | 
+ registration_number | text                     |           | not null | 
+ contact_email       | text                     |           | not null | 
+ kyb_status          | text                     |           | not null | 'pending'::text
+ created_at          | timestamp with time zone |           | not null | CURRENT_TIMESTAMP
+Indexes:
+    "business_pkey" PRIMARY KEY, btree (business_id)
+    "business_registration_unique" UNIQUE CONSTRAINT, btree (country_code, registration_number)
+Check constraints:
+    "business_country_check" CHECK (country_code = ANY (ARRAY['NG'::text, 'CA'::text, 'GB'::text, 'US'::text]))
+    "business_kyb_status_check" CHECK (kyb_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text]))
