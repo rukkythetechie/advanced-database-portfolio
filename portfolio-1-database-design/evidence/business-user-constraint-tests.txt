@@ -1,0 +1,43 @@
+Corridor Pay — Business User Constraint Test Results
+Date: 15 October 2026
+Database: corridorpay
+PostgreSQL version: 16.15
+Table: public.business_user
+
+These results summarise tests run manually in psql.
+All test inserts were performed inside one transaction.
+Savepoints allowed recovery after each expected error.
+
+1. Valid admin user
+   Result: Accepted; user_id = 1.
+   Role: admin.
+   is_active defaulted to true.
+   created_at was populated.
+
+2. Invalid role: manager
+   Result: Rejected by business_user_role_check.
+
+3. Duplicate email with different letter case
+   Existing email: admin@example.com.
+   Attempted email: ADMIN@EXAMPLE.COM.
+   Result: Rejected by business_user_email_unique.
+
+4. Nonexistent business: 999999
+   Result: Rejected by business_user_business_fk.
+
+5. Missing full_name: NULL
+   Result: Rejected by the full_name NOT NULL constraint.
+
+6. Valid finance and viewer users
+   Result: Both accepted.
+   Finance user_id = 6; viewer user_id = 7.
+   Both defaulted to is_active = true.
+
+7. Full rollback and final counts
+   Result: ROLLBACK completed.
+   business_count = 0.
+   user_count = 0.
+   No test records remained.
+
+These tests verify the outcomes listed above, not role-based
+permission enforcement or row-level security.

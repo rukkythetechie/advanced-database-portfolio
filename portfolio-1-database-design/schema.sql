@@ -19,3 +19,27 @@ CREATE TABLE business (
     CONSTRAINT business_registration_unique
         UNIQUE (country_code, registration_number)
 );
+-- Business users and their roles
+CREATE TABLE business_user (
+    user_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    business_id BIGINT NOT NULL,
+    full_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT business_user_business_fk
+        FOREIGN KEY (business_id)
+        REFERENCES business (business_id),
+
+    CONSTRAINT business_user_role_check
+        CHECK (role IN ('admin', 'finance', 'viewer')),
+
+    CONSTRAINT business_user_ownership_unique
+        UNIQUE (user_id, business_id)
+);
+
+-- Prevent duplicate emails, regardless of letter case
+CREATE UNIQUE INDEX business_user_email_unique
+    ON business_user (LOWER(email));

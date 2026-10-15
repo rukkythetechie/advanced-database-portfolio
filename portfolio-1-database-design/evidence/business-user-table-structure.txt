@@ -1,0 +1,18 @@
+                                 Table "public.business_user"
+   Column    |           Type           | Collation | Nullable |           Default            
+-------------+--------------------------+-----------+----------+------------------------------
+ user_id     | bigint                   |           | not null | generated always as identity
+ business_id | bigint                   |           | not null | 
+ full_name   | text                     |           | not null | 
+ email       | text                     |           | not null | 
+ role        | text                     |           | not null | 
+ is_active   | boolean                  |           | not null | true
+ created_at  | timestamp with time zone |           | not null | CURRENT_TIMESTAMP
+Indexes:
+    "business_user_pkey" PRIMARY KEY, btree (user_id)
+    "business_user_email_unique" UNIQUE, btree (lower(email))
+    "business_user_ownership_unique" UNIQUE CONSTRAINT, btree (user_id, business_id)
+Check constraints:
+    "business_user_role_check" CHECK (role = ANY (ARRAY['admin'::text, 'finance'::text, 'viewer'::text]))
+Foreign-key constraints:
+    "business_user_business_fk" FOREIGN KEY (business_id) REFERENCES business(business_id)
