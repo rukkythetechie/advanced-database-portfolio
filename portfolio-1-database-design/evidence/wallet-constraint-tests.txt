@@ -1,0 +1,57 @@
+Corridor Pay — Wallet Constraint Test Results
+Date: 16 October 2026
+Database: corridorpay
+PostgreSQL version: 16.15
+Table: public.wallet
+
+These results summarise tests run manually in psql.
+Test inserts and updates ran inside one transaction.
+Savepoints allowed recovery after expected errors.
+
+1. Valid NGN wallet
+   Result: Accepted for business_id = 8.
+   wallet_id = 1.
+   Balance defaulted to 0.00.
+   created_at was populated.
+
+2. Duplicate currency for the same business
+   Attempt: Create another NGN wallet for business_id = 8.
+   Result: Rejected by wallet_business_currency_unique.
+
+3. Other supported currencies
+   Result: CAD, GBP and USD wallets were accepted for
+   business_id = 8, each with a balance of 0.00.
+
+4. Unsupported currency
+   Attempt: Create an EUR wallet.
+   Result: Rejected by wallet_currency_check.
+
+5. Negative balance
+   Attempt: Update the NGN wallet balance to -1.00.
+   Result: Rejected by wallet_balance_check.
+
+6. Nonexistent business
+   Attempt: Create a wallet for business_id = 999999.
+   Result: Rejected by wallet_business_fk.
+
+7. Same currency for another business
+   Result: An NGN wallet was accepted for business_id = 10.
+   wallet_id = 11; balance = 0.00.
+   This confirms currency uniqueness applies per business.
+
+8. Full rollback and final counts
+   Result: ROLLBACK completed.
+   business_count = 0.
+   wallet_count = 0.
+   No test records remained.
+
+Session notes:
+Two accidental pastes of non-SQL text caused syntax errors.
+The transaction was recovered using existing savepoints,
+and affected test inserts were repeated successfully.
+Identity values consumed by rolled-back inserts were not reused.
+
+Implementation scope:
+These tests cover the wallet constraints listed above.
+Linked ledger-account creation, ledger-controlled balance updates,
+permissions and row-level security have not yet been implemented.

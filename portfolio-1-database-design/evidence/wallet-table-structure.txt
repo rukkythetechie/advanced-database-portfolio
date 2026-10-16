@@ -1,0 +1,17 @@
+                                     Table "public.wallet"
+    Column     |           Type           | Collation | Nullable |           Default            
+---------------+--------------------------+-----------+----------+------------------------------
+ wallet_id     | bigint                   |           | not null | generated always as identity
+ business_id   | bigint                   |           | not null | 
+ currency_code | text                     |           | not null | 
+ balance       | numeric(20,2)            |           | not null | 0
+ created_at    | timestamp with time zone |           | not null | CURRENT_TIMESTAMP
+Indexes:
+    "wallet_pkey" PRIMARY KEY, btree (wallet_id)
+    "wallet_business_currency_unique" UNIQUE CONSTRAINT, btree (business_id, currency_code)
+    "wallet_ownership_unique" UNIQUE CONSTRAINT, btree (wallet_id, business_id)
+Check constraints:
+    "wallet_balance_check" CHECK (balance >= 0::numeric)
+    "wallet_currency_check" CHECK (currency_code = ANY (ARRAY['NGN'::text, 'CAD'::text, 'GBP'::text, 'USD'::text]))
+Foreign-key constraints:
+    "wallet_business_fk" FOREIGN KEY (business_id) REFERENCES business(business_id)
