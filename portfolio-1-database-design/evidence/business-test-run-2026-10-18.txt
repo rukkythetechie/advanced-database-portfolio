@@ -1,0 +1,110 @@
+-- Corridor Pay: Business table constraint tests
+-- Run using psql against the empty Business table.
+-- Four errors are expected. All test rows are rolled back.
+-- Allow psql to continue after intentional constraint errors.
+\set ON_ERROR_STOP off
+BEGIN;
+BEGIN
+-- 1. Valid insert: expect an ID, pending status and timestamp.
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Rooks Trading Ltd', 'NG',
+    'TEST-NG-001', 'contact@rookstrading.example'
+)
+RETURNING business_id, kyb_status, created_at;
+ business_id | kyb_status |          created_at           
+-------------+------------+-------------------------------
+          11 | pending    | 2026-10-18 20:13:34.044623+00
+(1 row)
+
+INSERT 0 1
+-- 2. Unsupported country: expect business_country_check error.
+SAVEPOINT before_invalid_country;
+SAVEPOINT
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Unsupported Country Test', 'FR',
+    'TEST-FR-001', 'test@example.com'
+);
+ERROR:  new row for relation "business" violates check constraint "business_country_check"
+DETAIL:  Failing row contains (12, Unsupported Country Test, FR, TEST-FR-001, test@example.com, pending, 2026-10-18 20:13:34.044623+00).
+ROLLBACK TO SAVEPOINT before_invalid_country;
+ROLLBACK
+-- 3. Duplicate country and registration: expect unique error.
+SAVEPOINT before_duplicate_registration;
+SAVEPOINT
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Duplicate Registration Test', 'NG',
+    'TEST-NG-001', 'duplicate@example.com'
+);
+ERROR:  duplicate key value violates unique constraint "business_registration_unique"
+DETAIL:  Key (country_code, registration_number)=(NG, TEST-NG-001) already exists.
+ROLLBACK TO SAVEPOINT before_duplicate_registration;
+ROLLBACK
+-- 4. Same registration in another country: expect success.
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Canada Registration Test', 'CA',
+    'TEST-NG-001', 'canada@example.com'
+)
+RETURNING business_id, country_code, registration_number;
+ business_id | country_code | registration_number 
+-------------+--------------+---------------------
+          14 | CA           | TEST-NG-001
+(1 row)
+
+INSERT 0 1
+-- 5. Invalid status: expect business_kyb_status_check error.
+SAVEPOINT before_invalid_status;
+SAVEPOINT
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email, kyb_status
+)
+VALUES (
+    'Invalid Status Test', 'NG',
+    'TEST-NG-002', 'status@example.com', 'verified'
+);
+ERROR:  new row for relation "business" violates check constraint "business_kyb_status_check"
+DETAIL:  Failing row contains (15, Invalid Status Test, NG, TEST-NG-002, status@example.com, verified, 2026-10-18 20:13:34.044623+00).
+ROLLBACK TO SAVEPOINT before_invalid_status;
+ROLLBACK
+-- 6. Missing name: expect not-null error.
+SAVEPOINT before_missing_name;
+SAVEPOINT
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    NULL, 'NG',
+    'TEST-NG-003', 'missingname@example.com'
+);
+ROLLBACK TO SAVEPOINT before_missing_name;
+ERROR:  null value in column "business_name" of relation "business" violates not-null constraint
+DETAIL:  Failing row contains (16, null, NG, TEST-NG-003, missingname@example.com, pending, 2026-10-18 20:13:34.044623+00).
+ROLLBACK
+-- 7. Remove test rows and verify the empty table.
+ROLLBACK;
+ROLLBACK
+SELECT COUNT(*) AS business_count FROM business;
+ business_count 
+----------------
+              0
+(1 row)
+
+-- Restore stop-on-error behaviour for subsequent scripts.
+\set ON_ERROR_STOP on
