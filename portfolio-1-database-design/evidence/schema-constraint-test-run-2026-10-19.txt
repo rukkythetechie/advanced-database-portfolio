@@ -1,0 +1,813 @@
+-- Corridor Pay: Schema constraint tests
+-- Run using psql against the empty corridorpay_p1_check database.
+-- Tests cover table constraints, not operational payment routines.
+-- All test records will be rolled back at the end of this script.
+\set ON_ERROR_STOP on
+BEGIN;
+BEGIN
+\echo 'SETUP: Create two separate businesses'
+SETUP: Create two separate businesses
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Schema Test Business A', 'NG',
+    'SCHEMA-TEST-A', 'a@example.com'
+)
+RETURNING business_id AS business_a
+\gset
+INSERT 0 1
+INSERT INTO business (
+    business_name, country_code,
+    registration_number, contact_email
+)
+VALUES (
+    'Schema Test Business B', 'CA',
+    'SCHEMA-TEST-B', 'b@example.com'
+)
+RETURNING business_id AS business_b
+\gset
+INSERT 0 1
+INSERT INTO business_user (
+    business_id, full_name, email, role
+)
+VALUES (
+    :business_a, 'Admin A', 'schema-admin-a@example.com', 'admin'
+)
+RETURNING user_id AS user_a
+\gset
+INSERT 0 1
+INSERT INTO business_user (
+    business_id, full_name, email, role
+)
+VALUES (
+    :business_b, 'Admin B', 'schema-admin-b@example.com', 'admin'
+)
+RETURNING user_id AS user_b
+\gset
+INSERT 0 1
+INSERT INTO wallet (business_id, currency_code)
+VALUES (:business_a, 'NGN')
+RETURNING wallet_id AS wallet_a_ngn
+\gset
+INSERT 0 1
+INSERT INTO wallet (business_id, currency_code)
+VALUES (:business_a, 'USD')
+RETURNING wallet_id AS wallet_a_usd
+\gset
+INSERT 0 1
+INSERT INTO wallet (business_id, currency_code)
+VALUES (:business_b, 'NGN')
+RETURNING wallet_id AS wallet_b_ngn
+\gset
+INSERT 0 1
+\echo 'TEST 1: Valid beneficiary with optional routing omitted'
+TEST 1: Valid beneficiary with optional routing omitted
+INSERT INTO beneficiary (
+    business_id, beneficiary_name, country_code,
+    currency_code, bank_name, account_reference
+)
+VALUES (
+    :business_a, 'Test Supplier', 'NG',
+    'NGN', 'Example Bank', '0012345678'
+)
+RETURNING beneficiary_id AS beneficiary_a
+\gset
+INSERT 0 1
+SELECT beneficiary_id, account_reference, routing_reference
+FROM beneficiary
+WHERE beneficiary_id = :beneficiary_a;
+ beneficiary_id | account_reference | routing_reference 
+----------------+-------------------+-------------------
+              1 | 0012345678        | 
+(1 row)
+
+\echo 'TEST 2: Another business can save the same supplier destination'
+TEST 2: Another business can save the same supplier destination
+INSERT INTO beneficiary (
+    business_id, beneficiary_name, country_code,
+    currency_code, bank_name, account_reference
+)
+VALUES (
+    :business_b, 'Test Supplier', 'NG',
+    'NGN', 'Example Bank', '0012345678'
+)
+RETURNING beneficiary_id AS beneficiary_b
+\gset
+INSERT 0 1
+SELECT beneficiary_id, business_id, account_reference
+FROM beneficiary
+ORDER BY beneficiary_id;
+ beneficiary_id | business_id | account_reference 
+----------------+-------------+-------------------
+              1 |           1 | 0012345678
+              2 |           2 | 0012345678
+(2 rows)
+
+\echo 'TEST 3: Unsupported beneficiary currency must fail'
+TEST 3: Unsupported beneficiary currency must fail
+SAVEPOINT invalid_beneficiary_currency;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO beneficiary (
+    business_id, beneficiary_name, country_code,
+    currency_code, bank_name, account_reference
+)
+VALUES (
+    :business_a, 'Invalid Currency Supplier', 'NG',
+    'EUR', 'Example Bank', 'TEST-003'
+);
+ROLLBACK TO SAVEPOINT invalid_beneficiary_currency;
+ERROR:  new row for relation "beneficiary" violates check constraint "beneficiary_currency_check"
+DETAIL:  Failing row contains (3, 1, Invalid Currency Supplier, NG, EUR, Example Bank, TEST-003, null, 2026-10-19 22:54:56.880335+00).
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 4: Unsupported beneficiary country must fail'
+TEST 4: Unsupported beneficiary country must fail
+SAVEPOINT invalid_beneficiary_country;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO beneficiary (
+    business_id, beneficiary_name, country_code,
+    currency_code, bank_name, account_reference
+)
+VALUES (
+    :business_a, 'Invalid Country Supplier', 'FR',
+    'USD', 'Example Bank', 'TEST-004'
+);
+ROLLBACK TO SAVEPOINT invalid_beneficiary_country;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 5: Missing beneficiary account reference must fail'
+TEST 5: Missing beneficiary account reference must fail
+SAVEPOINT missing_account_reference;
+ERROR:  new row for relation "beneficiary" violates check constraint "beneficiary_country_check"
+DETAIL:  Failing row contains (4, 1, Invalid Country Supplier, FR, USD, Example Bank, TEST-004, null, 2026-10-19 22:54:56.880335+00).
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO beneficiary (
+    business_id, beneficiary_name, country_code,
+    currency_code, bank_name, account_reference
+)
+VALUES (
+    :business_a, 'Missing Account Supplier', 'NG',
+    'NGN', 'Example Bank', NULL
+);
+ROLLBACK TO SAVEPOINT missing_account_reference;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 6: Valid FX quote must succeed'
+TEST 6: Valid FX quote must succeed
+INSERT INTO fx_quote (
+    business_id, source_currency, target_currency,
+    source_amount, exchange_rate, expires_at
+)
+VALUES (
+    :business_a, 'NGN', 'USD',
+    160000.00, 0.000752154660,
+    CURRENT_TIMESTAMP + INTERVAL '1 hour'
+)
+RETURNING quote_id AS quote_a
+\gset
+ERROR:  null value in column "account_reference" of relation "beneficiary" violates not-null constraint
+DETAIL:  Failing row contains (5, 1, Missing Account Supplier, NG, NGN, Example Bank, null, null, 2026-10-19 22:54:56.880335+00).
+INSERT 0 1
+SELECT quote_id, source_currency, target_currency,
+       source_amount, exchange_rate,
+       ROUND(source_amount * exchange_rate, 2) AS target_amount
+FROM fx_quote
+WHERE quote_id = :quote_a;
+ quote_id | source_currency | target_currency | source_amount | exchange_rate  | target_amount 
+----------+-----------------+-----------------+---------------+----------------+---------------
+        1 | NGN             | USD             |     160000.00 | 0.000752154660 |        120.34
+(1 row)
+
+\echo 'TEST 7: Identical source and target currencies must fail'
+TEST 7: Identical source and target currencies must fail
+SAVEPOINT identical_quote_currencies;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_quote (
+    business_id, source_currency, target_currency,
+    source_amount, exchange_rate, expires_at
+)
+VALUES (
+    :business_a, 'NGN', 'NGN',
+    100.00, 1.00,
+    CURRENT_TIMESTAMP + INTERVAL '1 hour'
+);
+ERROR:  new row for relation "fx_quote" violates check constraint "fx_quote_different_currencies_check"
+DETAIL:  Failing row contains (2, 1, NGN, NGN, 100.00, 1.000000000000, 2026-10-19 22:54:56.880335+00, 2026-10-19 23:54:56.880335+00).
+ROLLBACK TO SAVEPOINT identical_quote_currencies;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 8: Zero source amount must fail'
+TEST 8: Zero source amount must fail
+SAVEPOINT zero_quote_amount;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_quote (
+    business_id, source_currency, target_currency,
+    source_amount, exchange_rate, expires_at
+)
+VALUES (
+    :business_a, 'NGN', 'USD',
+    0.00, 0.000752154660,
+    CURRENT_TIMESTAMP + INTERVAL '1 hour'
+);
+ERROR:  new row for relation "fx_quote" violates check constraint "fx_quote_source_amount_check"
+DETAIL:  Failing row contains (3, 1, NGN, USD, 0.00, 0.000752154660, 2026-10-19 22:54:56.880335+00, 2026-10-19 23:54:56.880335+00).
+ROLLBACK TO SAVEPOINT zero_quote_amount;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 9: Expiry before creation must fail'
+TEST 9: Expiry before creation must fail
+SAVEPOINT invalid_quote_expiry;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_quote (
+    business_id, source_currency, target_currency,
+    source_amount, exchange_rate, expires_at
+)
+VALUES (
+    :business_a, 'NGN', 'USD',
+    160000.00, 0.000752154660,
+    CURRENT_TIMESTAMP - INTERVAL '1 minute'
+);
+ERROR:  new row for relation "fx_quote" violates check constraint "fx_quote_expiry_check"
+DETAIL:  Failing row contains (4, 1, NGN, USD, 160000.00, 0.000752154660, 2026-10-19 22:54:56.880335+00, 2026-10-19 22:53:56.880335+00).
+ROLLBACK TO SAVEPOINT invalid_quote_expiry;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 10: Target amount rounding to zero must fail'
+TEST 10: Target amount rounding to zero must fail
+SAVEPOINT zero_rounded_target;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_quote (
+    business_id, source_currency, target_currency,
+    source_amount, exchange_rate, expires_at
+)
+VALUES (
+    :business_a, 'NGN', 'USD',
+    0.01, 0.000000000001,
+    CURRENT_TIMESTAMP + INTERVAL '1 hour'
+);
+ROLLBACK TO SAVEPOINT zero_rounded_target;
+ERROR:  new row for relation "fx_quote" violates check constraint "fx_quote_target_amount_check"
+DETAIL:  Failing row contains (5, 1, NGN, USD, 0.01, 0.000000000001, 2026-10-19 22:54:56.880335+00, 2026-10-19 23:54:56.880335+00).
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 11: Valid pending payment must succeed'
+TEST 11: Valid pending payment must succeed
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a, :user_a, 50000.00
+)
+RETURNING payment_id AS payment_a
+\gset
+INSERT 0 1
+SELECT payment_id, business_id, amount, status, completed_at
+FROM payment
+WHERE payment_id = :payment_a;
+ payment_id | business_id |  amount  | status  | completed_at 
+------------+-------------+----------+---------+--------------
+          1 |           1 | 50000.00 | pending | 
+(1 row)
+
+\echo 'TEST 12: Another business wallet must fail'
+TEST 12: Another business wallet must fail
+SAVEPOINT payment_wrong_wallet;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_b_ngn, :beneficiary_a, :user_a, 100.00
+);
+ERROR:  insert or update on table "payment" violates foreign key constraint "payment_wallet_ownership_fk"
+DETAIL:  Key (wallet_id, business_id)=(3, 1) is not present in table "wallet".
+ROLLBACK TO SAVEPOINT payment_wrong_wallet;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 13: Another business beneficiary must fail'
+TEST 13: Another business beneficiary must fail
+SAVEPOINT payment_wrong_beneficiary;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_b, :user_a, 100.00
+);
+ERROR:  insert or update on table "payment" violates foreign key constraint "payment_beneficiary_ownership_fk"
+DETAIL:  Key (beneficiary_id, business_id)=(2, 1) is not present in table "beneficiary".
+ROLLBACK TO SAVEPOINT payment_wrong_beneficiary;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 14: Another business user must fail'
+TEST 14: Another business user must fail
+SAVEPOINT payment_wrong_user;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a, :user_b, 100.00
+);
+ROLLBACK TO SAVEPOINT payment_wrong_user;
+ERROR:  insert or update on table "payment" violates foreign key constraint "payment_user_ownership_fk"
+DETAIL:  Key (initiated_by, business_id)=(2, 1) is not present in table "business_user".
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 15: Negative payment amount must fail'
+TEST 15: Negative payment amount must fail
+SAVEPOINT negative_payment_amount;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a, :user_a, -1.00
+);
+ROLLBACK TO SAVEPOINT negative_payment_amount;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 16: Unsupported payment status must fail'
+TEST 16: Unsupported payment status must fail
+SAVEPOINT invalid_payment_status;
+ERROR:  new row for relation "payment" violates check constraint "payment_amount_check"
+DETAIL:  Failing row contains (5, 1, 1, 1, 1, -1.00, pending, 2026-10-19 22:54:56.880335+00, null).
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id,
+    initiated_by, amount, status
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a,
+    :user_a, 100.00, 'cancelled'
+);
+ERROR:  new row for relation "payment" violates check constraint "payment_status_check"
+DETAIL:  Failing row contains (6, 1, 1, 1, 1, 100.00, cancelled, 2026-10-19 22:54:56.880335+00, null).
+ROLLBACK TO SAVEPOINT invalid_payment_status;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 17: Completed payment without completion time must fail'
+TEST 17: Completed payment without completion time must fail
+SAVEPOINT missing_completion_time;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id,
+    initiated_by, amount, status
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a,
+    :user_a, 100.00, 'completed'
+);
+ERROR:  new row for relation "payment" violates check constraint "payment_completed_timestamp_check"
+DETAIL:  Failing row contains (7, 1, 1, 1, 1, 100.00, completed, 2026-10-19 22:54:56.880335+00, null).
+ROLLBACK TO SAVEPOINT missing_completion_time;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 18: Valid wallet liability account must succeed'
+TEST 18: Valid wallet liability account must succeed
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code, wallet_id
+)
+VALUES (
+    'Business A NGN Wallet', 'liability', 'NGN', :wallet_a_ngn
+)
+RETURNING ledger_account_id AS account_a_ngn
+\gset
+INSERT 0 1
+\echo 'TEST 19: A second account for the same wallet must fail'
+TEST 19: A second account for the same wallet must fail
+SAVEPOINT duplicate_wallet_account;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code, wallet_id
+)
+VALUES (
+    'Duplicate NGN Wallet Account', 'liability', 'NGN', :wallet_a_ngn
+);
+ERROR:  duplicate key value violates unique constraint "ledger_account_wallet_id_key"
+DETAIL:  Key (wallet_id)=(1) already exists.
+ROLLBACK TO SAVEPOINT duplicate_wallet_account;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 20: Wallet-linked asset account must fail'
+TEST 20: Wallet-linked asset account must fail
+SAVEPOINT invalid_wallet_account_type;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code, wallet_id
+)
+VALUES (
+    'Invalid USD Wallet Account', 'asset', 'USD', :wallet_a_usd
+);
+ERROR:  new row for relation "ledger_account" violates check constraint "ledger_account_wallet_liability_check"
+DETAIL:  Failing row contains (3, Invalid USD Wallet Account, asset, USD, 2, 2026-10-19 22:54:56.880335+00).
+ROLLBACK TO SAVEPOINT invalid_wallet_account_type;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 21: Platform cash account without wallet must succeed'
+TEST 21: Platform cash account without wallet must succeed
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code
+)
+VALUES (
+    'Platform NGN Cash', 'asset', 'NGN'
+)
+RETURNING ledger_account_id AS cash_ngn
+\gset
+INSERT 0 1
+\echo 'TEST 22: Draft funding transaction and entries must succeed'
+TEST 22: Draft funding transaction and entries must succeed
+INSERT INTO ledger_transaction (
+    transaction_type, description
+)
+VALUES (
+    'funding', 'Draft funding example for schema tests'
+)
+RETURNING ledger_transaction_id AS funding_transaction
+\gset
+INSERT 0 1
+INSERT INTO ledger_entry (
+    ledger_transaction_id, ledger_account_id, entry_type, amount
+)
+VALUES
+    (:funding_transaction, :cash_ngn, 'debit', 100000.00),
+    (:funding_transaction, :account_a_ngn, 'credit', 100000.00);
+INSERT 0 2
+SELECT ledger_transaction_id, status, posted_at
+FROM ledger_transaction
+WHERE ledger_transaction_id = :funding_transaction;
+ ledger_transaction_id | status | posted_at 
+-----------------------+--------+-----------
+                     1 | draft  | 
+(1 row)
+
+SELECT entry_type, amount
+FROM ledger_entry
+WHERE ledger_transaction_id = :funding_transaction
+ORDER BY ledger_entry_id;
+ entry_type |  amount   
+------------+-----------
+ debit      | 100000.00
+ credit     | 100000.00
+(2 rows)
+
+\echo 'TEST 23: Zero ledger entry amount must fail'
+TEST 23: Zero ledger entry amount must fail
+SAVEPOINT zero_entry_amount;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_entry (
+    ledger_transaction_id, ledger_account_id, entry_type, amount
+)
+VALUES (
+    :funding_transaction, :cash_ngn, 'debit', 0.00
+);
+ERROR:  new row for relation "ledger_entry" violates check constraint "ledger_entry_amount_check"
+DETAIL:  Failing row contains (3, 1, 4, debit, 0.00).
+ROLLBACK TO SAVEPOINT zero_entry_amount;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 24: Unsupported ledger entry type must fail'
+TEST 24: Unsupported ledger entry type must fail
+SAVEPOINT invalid_entry_type;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_entry (
+    ledger_transaction_id, ledger_account_id, entry_type, amount
+)
+VALUES (
+    :funding_transaction, :cash_ngn, 'transfer', 100.00
+);
+ROLLBACK TO SAVEPOINT invalid_entry_type;
+ERROR:  new row for relation "ledger_entry" violates check constraint "ledger_entry_type_check"
+DETAIL:  Failing row contains (4, 1, 4, transfer, 100.00).
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 25: Payout transaction without payment reference must fail'
+TEST 25: Payout transaction without payment reference must fail
+SAVEPOINT missing_payout_payment;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_transaction (
+    transaction_type, description
+)
+VALUES (
+    'payout_processing', 'Invalid posting without payment reference'
+);
+ERROR:  new row for relation "ledger_transaction" violates check constraint "ledger_transaction_payout_payment_check"
+DETAIL:  Failing row contains (2, payout_processing, Invalid posting without payment reference, draft, null, null, 2026-10-19 22:54:56.880335+00, null).
+ROLLBACK TO SAVEPOINT missing_payout_payment;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 26: Posted status without posting timestamp must fail'
+TEST 26: Posted status without posting timestamp must fail
+SAVEPOINT missing_posted_timestamp;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO ledger_transaction (
+    transaction_type, description, status
+)
+VALUES (
+    'funding', 'Invalid posted transaction without timestamp', 'posted'
+);
+ERROR:  new row for relation "ledger_transaction" violates check constraint "ledger_transaction_posted_at_check"
+DETAIL:  Failing row contains (3, funding, Invalid posted transaction without timestamp, posted, null, null, 2026-10-19 22:54:56.880335+00, null).
+ROLLBACK TO SAVEPOINT missing_posted_timestamp;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 27: Initial pending history record must succeed'
+TEST 27: Initial pending history record must succeed
+INSERT INTO payment_status_history (
+    payment_id, from_status, to_status,
+    actor_type, changed_by, reason
+)
+VALUES (
+    :payment_a, NULL, 'pending',
+    'user', :user_a, 'Payment instruction created'
+)
+RETURNING history_id, from_status, to_status, actor_type;
+ history_id | from_status | to_status | actor_type 
+------------+-------------+-----------+------------
+          1 |             | pending   | user
+(1 row)
+
+INSERT 0 1
+\echo 'TEST 28: System history actor with a user ID must fail'
+TEST 28: System history actor with a user ID must fail
+SAVEPOINT invalid_history_actor;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment_status_history (
+    payment_id, from_status, to_status,
+    actor_type, changed_by, reason
+)
+VALUES (
+    :payment_a, 'pending', 'failed',
+    'system', :user_a, 'Invalid system actor example'
+);
+ROLLBACK TO SAVEPOINT invalid_history_actor;
+ROLLBACK
+ERROR:  new row for relation "payment_status_history" violates check constraint "payment_history_actor_check"
+DETAIL:  Failing row contains (2, 1, pending, failed, 2026-10-19 22:54:56.880335+00, system, 1, Invalid system actor example, null).
+\set ON_ERROR_STOP on
+\echo 'TEST 29: History cannot link a posting from another payment'
+TEST 29: History cannot link a posting from another payment
+INSERT INTO payment (
+    business_id, wallet_id, beneficiary_id, initiated_by, amount
+)
+VALUES (
+    :business_a, :wallet_a_ngn, :beneficiary_a, :user_a, 200.00
+)
+RETURNING payment_id AS second_payment_a
+\gset
+INSERT 0 1
+INSERT INTO ledger_transaction (
+    transaction_type, description, payment_id
+)
+VALUES (
+    'payout_processing', 'Draft posting for second payment',
+    :second_payment_a
+)
+RETURNING ledger_transaction_id AS second_payment_posting
+\gset
+INSERT 0 1
+SAVEPOINT history_wrong_payment_posting;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO payment_status_history (
+    payment_id, from_status, to_status,
+    actor_type, changed_by, reason, ledger_transaction_id
+)
+VALUES (
+    :payment_a, 'pending', 'processing',
+    'user', :user_a, 'Invalid link to another payment',
+    :second_payment_posting
+);
+ERROR:  insert or update on table "payment_status_history" violates foreign key constraint "payment_history_ledger_payment_fk"
+DETAIL:  Key (ledger_transaction_id, payment_id)=(4, 1) is not present in table "ledger_transaction".
+ROLLBACK TO SAVEPOINT history_wrong_payment_posting;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 30: Valid user audit event must succeed'
+TEST 30: Valid user audit event must succeed
+INSERT INTO audit_event (
+    business_id, actor_type, actor_user_id,
+    action, entity_type, entity_id, outcome
+)
+VALUES (
+    :business_a, 'user', :user_a,
+    'payment_created', 'payment', :payment_a, 'success'
+)
+RETURNING audit_event_id, outcome, details;
+ audit_event_id | outcome | details 
+----------------+---------+---------
+              1 | success | {}
+(1 row)
+
+INSERT 0 1
+\echo 'TEST 31: Audit actor from another business must fail'
+TEST 31: Audit actor from another business must fail
+SAVEPOINT audit_wrong_business_user;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO audit_event (
+    business_id, actor_type, actor_user_id,
+    action, entity_type, outcome
+)
+VALUES (
+    :business_a, 'user', :user_b,
+    'test_action', 'payment', 'failure'
+);
+ROLLBACK TO SAVEPOINT audit_wrong_business_user;
+ERROR:  insert or update on table "audit_event" violates foreign key constraint "audit_event_user_ownership_fk"
+DETAIL:  Key (actor_user_id, business_id)=(2, 1) is not present in table "business_user".
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 32: Audit details must be a JSON object'
+TEST 32: Audit details must be a JSON object
+SAVEPOINT audit_invalid_details;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO audit_event (
+    business_id, actor_type, action,
+    entity_type, outcome, details
+)
+VALUES (
+    :business_a, 'system', 'test_action',
+    'payment', 'failure', '[]'::JSONB
+);
+ROLLBACK TO SAVEPOINT audit_invalid_details;
+ERROR:  new row for relation "audit_event" violates check constraint "audit_event_details_object_check"
+DETAIL:  Failing row contains (3, 1, system, null, test_action, payment, null, failure, [], 2026-10-19 22:54:56.880335+00).
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'SETUP: FX accounts and balanced entries for conversion tests'
+SETUP: FX accounts and balanced entries for conversion tests
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code, wallet_id
+)
+VALUES (
+    'Business A USD Wallet', 'liability', 'USD', :wallet_a_usd
+)
+RETURNING ledger_account_id AS account_a_usd
+\gset
+INSERT 0 1
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code
+)
+VALUES (
+    'NGN FX Position', 'asset', 'NGN'
+)
+RETURNING ledger_account_id AS fx_ngn
+\gset
+INSERT 0 1
+INSERT INTO ledger_account (
+    account_name, account_type, currency_code
+)
+VALUES (
+    'USD FX Position', 'asset', 'USD'
+)
+RETURNING ledger_account_id AS fx_usd
+\gset
+INSERT 0 1
+INSERT INTO ledger_transaction (
+    transaction_type, description
+)
+VALUES (
+    'fx_conversion', 'Structural FX example for constraint tests'
+)
+RETURNING ledger_transaction_id AS fx_transaction
+\gset
+INSERT 0 1
+INSERT INTO ledger_entry (
+    ledger_transaction_id, ledger_account_id, entry_type, amount
+)
+VALUES
+    (:fx_transaction, :account_a_ngn, 'debit', 160000.00),
+    (:fx_transaction, :fx_ngn, 'credit', 160000.00),
+    (:fx_transaction, :fx_usd, 'debit', 120.34),
+    (:fx_transaction, :account_a_usd, 'credit', 120.34);
+INSERT 0 4
+UPDATE ledger_transaction
+SET status = 'posted',
+    posted_at = CURRENT_TIMESTAMP
+WHERE ledger_transaction_id = :fx_transaction;
+UPDATE 1
+-- This is a table-constraint fixture, not an operational conversion.
+-- Atomic wallet updates and controlled posting are tested later.
+\echo 'TEST 33: Conversion with valid references must succeed'
+TEST 33: Conversion with valid references must succeed
+INSERT INTO fx_conversion (
+    quote_id, business_id, source_wallet_id, target_wallet_id,
+    initiated_by, target_amount, ledger_transaction_id
+)
+VALUES (
+    :quote_a, :business_a, :wallet_a_ngn, :wallet_a_usd,
+    :user_a, 120.34, :fx_transaction
+)
+RETURNING conversion_id, quote_id, target_amount;
+ conversion_id | quote_id | target_amount 
+---------------+----------+---------------
+             1 |        1 |        120.34
+(1 row)
+
+INSERT 0 1
+\echo 'TEST 34: Reusing the same quote must fail'
+TEST 34: Reusing the same quote must fail
+SAVEPOINT reused_conversion_quote;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_conversion (
+    quote_id, business_id, source_wallet_id, target_wallet_id,
+    initiated_by, target_amount, ledger_transaction_id
+)
+VALUES (
+    :quote_a, :business_a, :wallet_a_ngn, :wallet_a_usd,
+    :user_a, 120.34, :funding_transaction
+);
+ERROR:  duplicate key value violates unique constraint "fx_conversion_quote_id_key"
+DETAIL:  Key (quote_id)=(1) already exists.
+ROLLBACK TO SAVEPOINT reused_conversion_quote;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'TEST 35: Conversion source and target wallets cannot be identical'
+TEST 35: Conversion source and target wallets cannot be identical
+SAVEPOINT identical_conversion_wallets;
+SAVEPOINT
+\set ON_ERROR_STOP off
+INSERT INTO fx_conversion (
+    quote_id, business_id, source_wallet_id, target_wallet_id,
+    initiated_by, target_amount, ledger_transaction_id
+)
+VALUES (
+    :quote_a, :business_a, :wallet_a_ngn, :wallet_a_ngn,
+    :user_a, 120.34, :funding_transaction
+);
+ERROR:  new row for relation "fx_conversion" violates check constraint "fx_conversion_different_wallets_check"
+DETAIL:  Failing row contains (3, 1, 1, 1, 1, 1, 120.34, 1, 2026-10-19 22:54:56.880335+00).
+ROLLBACK TO SAVEPOINT identical_conversion_wallets;
+ROLLBACK
+\set ON_ERROR_STOP on
+\echo 'CLEANUP: Roll back all test records'
+CLEANUP: Roll back all test records
+ROLLBACK;
+ROLLBACK
+\echo 'FINAL CHECK: Every table should have zero rows'
+FINAL CHECK: Every table should have zero rows
+SELECT 'business' AS table_name, COUNT(*) AS row_count FROM business
+UNION ALL
+SELECT 'business_user', COUNT(*) FROM business_user
+UNION ALL
+SELECT 'wallet', COUNT(*) FROM wallet
+UNION ALL
+SELECT 'beneficiary', COUNT(*) FROM beneficiary
+UNION ALL
+SELECT 'fx_quote', COUNT(*) FROM fx_quote
+UNION ALL
+SELECT 'payment', COUNT(*) FROM payment
+UNION ALL
+SELECT 'ledger_account', COUNT(*) FROM ledger_account
+UNION ALL
+SELECT 'ledger_transaction', COUNT(*) FROM ledger_transaction
+UNION ALL
+SELECT 'ledger_entry', COUNT(*) FROM ledger_entry
+UNION ALL
+SELECT 'fx_conversion', COUNT(*) FROM fx_conversion
+UNION ALL
+SELECT 'payment_status_history', COUNT(*) FROM payment_status_history
+UNION ALL
+SELECT 'audit_event', COUNT(*) FROM audit_event
+ORDER BY table_name;
+       table_name       | row_count 
+------------------------+-----------
+ audit_event            |         0
+ beneficiary            |         0
+ business               |         0
+ business_user          |         0
+ fx_conversion          |         0
+ fx_quote               |         0
+ ledger_account         |         0
+ ledger_entry           |         0
+ ledger_transaction     |         0
+ payment                |         0
+ payment_status_history |         0
+ wallet                 |         0
+(12 rows)
+
