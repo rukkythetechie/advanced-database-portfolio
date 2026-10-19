@@ -1,11 +1,11 @@
 # Advanced Database Systems Portfolio — MIT 8103
 
 **Student:** Rukayat Yaro
-**Case study:** Corridor Pay (fictional cross-border B2B payments platform)
+**Case study:** Corridor Pay (simulated cross-border B2B payments platform)
 
 ## 1. Case Study Statement
 
-**Organisation.** Corridor Pay is a fictional fintech company. It helps small and mid-sized businesses pay suppliers across borders. It operates in Nigeria, Canada, the United Kingdom and the United States.
+**Organisation.** Corridor Pay is a fintech company used as a simulated case study. It helps small and mid-sized businesses pay suppliers across borders. It operates in Nigeria, Canada, the United Kingdom and the United States.
 
 **Nature of the business.** Businesses sign up, pass KYB (Know Your Business) checks, and hold balances in several currencies. They convert between currencies at a quoted FX rate and send payouts to overseas beneficiaries. Corridor Pay settles payouts through local payment partners in each country.
 

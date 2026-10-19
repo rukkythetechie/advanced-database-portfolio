@@ -2,11 +2,11 @@
 
 ## **1\. Purpose and scope**
 
-Corridor Pay is a fictional fintech company that provides cross-border payment services to small and mid-sized businesses in Nigeria, Canada, the United Kingdom, and the United States; this prototype will demonstrate relational modelling, SQL implementation, a double-entry ledger architecture, atomic money movements, and concurrency management.
+Corridor Pay is a fintech company used as a simulated case study. It provides cross-border payment services to small and mid-sized businesses in Nigeria, Canada, the United Kingdom and the United States. This prototype will demonstrate relational modelling, SQL implementation, a double-entry ledger architecture, atomic money movements and concurrency management.
 
 The currencies that are supported are NGN, CAD, GBP, and USD; each business may have only one wallet for each currency. Spending-purpose wallets are not included in this prototype. Overdrafts, payment fees, partial reversals, integration with a real bank, authentication, and external foreign exchange trading are not implemented. Each business user is linked to a single business, and this project also excludes internal compliance and operations workflows.
 
-All business, user and banking details used in the prototype will be fictional.
+All business, user and banking details used in testing are sample data.
 
 ## **2\. Core business rules**
 
@@ -297,24 +297,37 @@ At the reference rate of ₦1,329.5138 per US dollar, ₦160,000 converts to app
 
 The four ledger entries form one transaction. Total NGN debits equal total NGN credits at ₦160,000, while total USD debits equal total USD credits at \$120.34. Each currency is checked separately. These entries record an internal conversion; the prototype excludes external FX settlement.
 
-## **6\. Relationships for the future ER diagram**
+## **6\. Relationships and cardinalities**
+
+These describe the intended model. Minimum requirements that need
+routines or triggers are distinguished from the current schema below.
 
 | Parent → child | Cardinality |
 | :---- | :---- |
-| Business → user/wallet/beneficiary/quote/payment/conversion/audit event | One to zero or many |
+| Business → users, wallets, beneficiaries, quotes, payments, conversions and audit events | One to zero or many |
 | Quote → conversion | One to zero or one |
-| Wallet → wallet liability ledger account | Exactly one to one |
+| Wallet → wallet liability ledger account | Intended: exactly one; current schema: zero or one |
 | Wallet → payments | One to zero or many |
 | Beneficiary → payments | One to zero or many |
-| User → initiated payments/conversions | One to zero or many |
-| Conversion → ledger transaction | Exactly one posted transaction per successful conversion |
-| Payment → ledger transactions | One to many |
-| Payment → status-history records | One to one or many |
-| Ledger transaction → entries | Draft: zero or many; posted: at least two |
+| User → initiated payments or conversions | One to zero or many |
+| Conversion → ledger transaction | Exactly one; posted status and FX type require additional enforcement |
+| Payment → ledger transactions | One to zero or many |
+| Payment → status-history records | Intended: one or many; current schema permits zero |
+| Ledger transaction → entries | Draft: zero or many; posting must eventually require at least two |
 | Ledger account → entries | One to zero or many |
 | Original ledger transaction → full reversal | One to zero or one |
 
-Each conversion links to two wallets: one supplying the funds and one receiving them. Payment status history and audit events also link to the user who triggered the action, where applicable. For system-triggered actions, the user reference remains empty.
+Each conversion references a source wallet and a target wallet.
+Composite foreign keys require both wallets, the quote and the
+initiating user to belong to the conversion's business.
+
+Payment status history and audit events reference user actors when
+applicable. System actors have no user reference. Audit user ownership
+is enforced by a composite foreign key; history user ownership still
+requires additional enforcement.
+
+Platform ledger accounts may have no wallet. A pending payment may
+have no ledger transactions because creating it does not move money.
 
 ## **7\. Enforcement and consistency plan**
 
@@ -334,26 +347,55 @@ Business details are separated from wallets/users; supplier destinations are sep
 
 Wallet.balance is deliberately derived data for efficient spending checks. It requires atomic updates and reconciliation. Some business\_id fields are repeated to enforce ownership efficiently; their consistency must be protected by composite relationships. Generic audit references have an explicitly documented integrity limitation.
 
-## **9\. Review outcome and remaining work**
+## **9\. Review outcome and current implementation**
 
-During the design review, I clarified the platform account types, limited conversion records to successful exchanges, and linked payouts to their ledger transactions. I also defined the two reversals needed to refund a completed payout, protected beneficiary details used by existing payments, retained original completion timestamps, and specified how failed attempts are logged after rollback. Ownership checks and safeguards against duplicate postings are included in the enforcement plan.
+The design review clarified platform account types, successful-conversion records, payout-to-ledger relationships, completed-payment reversals, beneficiary protection, completion timestamps and failure auditing.
 
-The assessment brief has been reviewed. Next, I will draw the ER diagram, explain functional dependencies and normalisation, and translate the design into PostgreSQL table definitions and routines. Testing will cover constraints, ledger balancing, rollback, quote reuse and expiry, permissions, payout transitions, concurrency and wallet reconciliation.
+All 12 tables have now been created successfully in the separate PostgreSQL database `corridorpay_p1_check`. The original `corridorpay` database currently contains the business, business_user and wallet tables.
 
-This document records proposed design decisions; no database tables or routines have been implemented or tested yet. I pushed the initial decisions to GitHub as commit f8d8185. I have not yet committed this fuller design draft to my repository.
+The full schema was executed against an empty database in one transaction with stop-on-error enabled. A script containing 35 numbered constraint tests was then run. Its successful examples and 25 expected constraint errors were reviewed. The final rollback left all 12 tables empty. SQL scripts, execution transcripts and selected screenshots are saved in the repository.
 
-## **10\. Working timeline**
+Currently enforced by the schema:
+- Primary keys, required fields and foreign-key references.
+- Supported currencies, countries, roles and status values.
+- One wallet per currency per business.
+- Case-insensitive user email uniqueness.
+- Business ownership of payment and conversion references.
+- Positive payment, quote, conversion and ledger-entry amounts.
+- Quote expiry later than creation and a positive rounded target amount.
+- Unique quote and ledger references for conversion records.
+- Wallet-linked ledger accounts classified as liabilities.
+- Payment-history ledger references belonging to the same payment.
+- Audit user ownership, actor rules and JSON-object details.
 
-* 12–18 October: finish design, ER diagram, keys, constraints and normalisation.  
-* 19–25 October: PostgreSQL schema, sample data, queries and index evaluation.  
-* 26 October–1 November: ledger/payout/FX routines, rollback and concurrency tests.  
-* 2–6 November: MongoDB and distributed/cloud discussion.  
-* 7–9 November: report assembly, rubric review, evidence and reproduction checks.  
-* 10 November 2026: confirm assessor access and submit.
+Still awaiting routines, triggers or access controls:
+- Business approval and user permission checks.
+- Payment currency agreement and immutable payment instructions.
+- Protection against editing beneficiary destinations already used.
+- Immutable quotes and expiry checks when accepting a quote.
+- Conversion currency matching, calculated amount verification and
+  validation of the linked ledger transaction's type and posted status.
+- Atomic creation of wallets and matching liability accounts.
+- Ledger-controlled balance updates and reconciliation.
+- Balanced posting per currency, posted-record protection and
+  correct compensating reversals.
+- Payout transition enforcement, automatic history creation and
+  prevention of duplicate processing or settlement postings.
+- Append-only history and audit records, history actor ownership,
+  restricted application privileges and row-level security.
 
-Write explanations and collect evidence throughout. Commit meaningful completed stages, not artificial daily checkpoints.
+The FX records in the schema tests are structural examples. They do
+not demonstrate an operational conversion, sufficient-funds checks
+or atomic wallet balance updates.
 
-## **11\. References**
+Portfolio 1 still requires final document alignment and an organised
+README. Operational financial routines and concurrency demonstrations
+will be developed and tested during Portfolio 3.
+
+The schema and constraint-test checkpoint was pushed as commit
+`0f113a4`. Portfolio 1 is not yet marked complete.
+
+## **10\. References**
 
 Central Bank of Nigeria. NFEM Exchange Rates. Entry dated 25 September 2026: ₦1,329.5138 per US dollar.
 

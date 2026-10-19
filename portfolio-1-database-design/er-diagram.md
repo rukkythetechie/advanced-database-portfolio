@@ -1,8 +1,8 @@
 # Corridor Pay — ER Diagram
 
-Working draft of the 12 proposed tables. Implementation and testing are still pending.
+All 12 tables have been created and their structural constraints tested in `corridorpay_p1_check`. This diagram shows the relationships permitted by the current schema. Some intended business rules still require routines, triggers or access controls.
 
-Uppercase diagram labels correspond to the lowercase SQL table names in the design document.
+Uppercase diagram labels correspond to the lowercase SQL table names. See Section 9 of the design document for implementation status.
 
 ```mermaid
 erDiagram
@@ -23,14 +23,14 @@ erDiagram
     WALLET ||--o{ FX_CONVERSION : target_wallet
     BUSINESS_USER ||--o{ FX_CONVERSION : initiates
 
-    WALLET |o--|| LEDGER_ACCOUNT : links_wallet_liability
+    WALLET |o--o| LEDGER_ACCOUNT : links_wallet_liability
     LEDGER_TRANSACTION ||--o| FX_CONVERSION : records_exchange
     PAYMENT |o--o{ LEDGER_TRANSACTION : has_postings
     LEDGER_TRANSACTION ||--o{ LEDGER_ENTRY : groups
     LEDGER_ACCOUNT ||--o{ LEDGER_ENTRY : receives_entries
     LEDGER_TRANSACTION |o--o| LEDGER_TRANSACTION : reversed_by
 
-    PAYMENT ||--|{ PAYMENT_STATUS_HISTORY : has_history
+    PAYMENT ||--o{ PAYMENT_STATUS_HISTORY : has_history
     BUSINESS_USER |o--o{ PAYMENT_STATUS_HISTORY : triggers
     LEDGER_TRANSACTION |o--o{ PAYMENT_STATUS_HISTORY : supports
     BUSINESS_USER |o--o{ AUDIT_EVENT : triggers
@@ -49,7 +49,7 @@ erDiagram
         bigint user_id PK
         bigint business_id FK
         text full_name
-        text email UK
+        text email "Unique through LOWER(email)"
         text role
         boolean is_active
         timestamptz created_at
@@ -124,10 +124,10 @@ erDiagram
         text transaction_type
         text description
         text status
-        bigint payment_id FK "Optional; required for payouts"
-        bigint reversal_of_transaction_id FK, UK "Optional; full reversal"
+        bigint payment_id FK "Optional; required for processing and settlement"
+        bigint reversal_of_transaction_id FK, UK "Optional; required for reversal type"
         timestamptz created_at
-        timestamptz posted_at "Optional until posted"
+        timestamptz posted_at "Required when posted"
     }
 
     LEDGER_ENTRY {
@@ -141,20 +141,20 @@ erDiagram
     PAYMENT_STATUS_HISTORY {
         bigint history_id PK
         bigint payment_id FK
-        text from_status "Optional for initial record"
+        text from_status "Optional for initial pending record"
         text to_status
         timestamptz changed_at
         text actor_type
-        bigint changed_by FK "Optional; user actors only"
+        bigint changed_by FK "Optional; required for user actors"
         text reason
-        bigint ledger_transaction_id FK "Optional; money movements"
+        bigint ledger_transaction_id FK "Optional; must match payment"
     }
 
     AUDIT_EVENT {
         bigint audit_event_id PK
         bigint business_id FK
         text actor_type
-        bigint actor_user_id FK "Optional; user actors only"
+        bigint actor_user_id FK "Optional; required for user actors"
         text action
         text entity_type
         bigint entity_id "Optional; generic reference"
@@ -168,97 +168,151 @@ erDiagram
 
 - PK means primary key.
 - FK means foreign key.
-- UK means unique key.
-- || means exactly one.
-- |o or o| means zero or one.
-- o{ means zero or many.
-- |{ means one or many.
+- UK marks a column with a uniqueness constraint. Nullable unique references are not candidate keys for the whole table.
+- `||` means exactly one.
+- `|o` or `o|` means zero or one.
+- `o{` means zero or many.
 - The symbol beside an entity describes how many of that entity may relate to one record at the other end.
-- Each wallet has exactly one liability ledger account. Each ledger account has zero or one wallet because platform accounts are not business wallets.
-- Each conversion has exactly one ledger transaction. A ledger transaction has zero or one conversion because other transaction types record funding or payouts.
-- Each original ledger transaction can have zero or one full reversal. A reversal must reference one original transaction; other transactions have no original reference.
-- User references in history and audit events are empty for system-triggered actions.
+- Each conversion references two wallets: a source wallet and a target wallet.
+- Each conversion has exactly one ledger transaction. A ledger transaction has zero or one conversion.
+- Each payment may have zero or many ledger transactions. A pending payment does not need a posting.
+- Each original ledger transaction may have zero or one full reversal. Transactions of type `reversal` must reference an original transaction.
+- User references in history and audit events are empty for system actions.
 
-## Additional constraints
+### Current schema and intended minimums
 
-The diagram shows relationships and keys. The following rules require SQL constraints or controlled routines.
+The schema currently permits a wallet to have zero or one linked ledger account. The intended requirement is exactly one matching liability account, created atomically with the wallet. Platform accounts have no wallet.
 
-### Business ownership and wallets
+The schema currently permits a payment to have zero or more history records. Automatic creation of its initial pending record remains to be implemented.
+
+Ledger transactions currently permit zero or more entries. Posting routines must eventually require at least two entries and equal debit and credit totals within each currency.
+
+## Keys and constraints enforced by the schema
+
+### Businesses, users and wallets
 
 - Supported countries are NG, CA, GB and US.
 - Supported currencies are NGN, CAD, GBP and USD.
-- UNIQUE(business_id, currency_code) on wallet ensures one wallet per currency per business.
-- UNIQUE(country_code, registration_number) on business prevents duplicate registration references within a country.
-- Business-user email addresses are unique and compared case-insensitively.
-- Payment wallets, beneficiaries and initiating users must belong to the payment's business.
-- Conversion quotes, wallets and initiating users must belong to the conversion's business.
-- Composite foreign keys and controlled routines will enforce ownership.
+- `UNIQUE(country_code, registration_number)` prevents duplicate business registration references within a country.
+- A unique index on `LOWER(email)` prevents duplicate user emails regardless of letter case.
+- Business-user roles are limited to admin, finance and viewer.
+- `UNIQUE(business_id, currency_code)` allows one wallet per currency per business.
+- Wallet balances default to zero and have a non-negative check.
+- Composite foreign keys enforce payment ownership of the wallet, beneficiary and initiating user.
+- Composite foreign keys enforce conversion ownership of the quote, both wallets and initiating user.
+
+### Beneficiaries and FX quotes
+
+- Beneficiaries must reference an existing business and use supported country and currency codes.
+- Account references are stored as text, preserving letters and leading zeros.
+- Routing references are optional.
+- Separate businesses may save the same supplier destination.
+- Quote source and target currencies must differ.
+- Quote amounts and exchange rates must be positive and cannot be numeric NaN values.
+- The calculated quote target amount must remain positive after rounding to two decimal places.
+- Quote expiry must be later than creation.
+- Conversion quote references are unique, preventing two conversion records for one quote.
+- Conversion source and target wallet IDs must differ.
+- Conversion target amounts must be positive and cannot be numeric NaN values.
+- Each conversion references a ledger transaction that cannot be shared by another conversion.
+
+### Payments and ledger records
+
+- Payment amounts must be positive and cannot be numeric NaN values.
+- Payment status is limited to pending, processing, completed, failed or reversed.
+- A completed payment requires `completed_at`.
+- A populated completion timestamp cannot be earlier than payment creation.
+- A wallet can link to at most one ledger account.
+- A wallet-linked ledger account must be a liability.
+- Ledger account types and currencies are restricted to the supported values.
+- Ledger entries must reference existing accounts and transactions.
+- Entry types are debit or credit, with positive amounts excluding numeric NaN values.
+- Ledger transactions have draft or posted status.
+- Draft transactions have no posting timestamp; posted transactions require one that is not earlier than creation.
+- Payout processing and settlement transactions require a payment reference.
+- Funding and FX transactions have no payment reference.
+- Reversal transactions require an original-transaction reference; other transaction types cannot have one.
+- A transaction cannot reverse itself.
+- Each original transaction can be referenced by at most one full reversal.
+
+### History and audit records
+
+- History records reference an existing payment.
+- A linked history ledger transaction must belong to that same payment.
+- A null `from_status` is permitted only when `to_status` is pending.
+- A populated `from_status` cannot equal `to_status`.
+- History reasons are required and cannot be blank.
+- User actors require a user reference; system actors must have no user reference.
+- Audit user actors must belong to the event's business.
+- Audit outcomes are success or failure.
+- Audit details must be a JSON object and default to `{}`.
+- Audit action and entity type cannot be blank.
+- Generic audit `entity_id` has no foreign key because it can refer to different tables.
+
+Composite uniqueness constraints used to support ownership foreign keys are defined in `schema.sql`. They are not displayed as individual-column unique keys in this diagram.
+
+## Rules requiring additional enforcement
+
+The following remain intended requirements. Their routines, triggers or access controls have not yet been implemented.
+
+### Access and ownership protection
+
 - Only approved businesses and active admin or finance users may initiate payments or conversions.
-- Wallets start at zero and cannot have negative balances.
-- Each wallet balance must equal posted credits minus posted debits on its liability account.
-- Each wallet-linked ledger account must be a liability account in the wallet's currency.
+- Viewers have read-only access.
+- Restricted database privileges and row-level security must be addressed during access-control work.
+- History user actors must belong to the payment's business.
+- Used beneficiary destinations cannot be edited or deleted.
+- Payment amount, business, wallet, beneficiary and initiating user remain fixed after creation.
+
+### Wallets and conversions
+
+- Each wallet is created with one liability ledger account in the same currency.
+- Wallet ownership, currency and its ledger-account association are protected against changes that would invalidate financial history.
+- Wallets begin at zero; funding is recorded through the ledger.
+- Stored balances change only through controlled posting routines.
+- Stored balances reconcile to posted credits minus posted debits on the wallet liability account.
+- Payment wallet and beneficiary currencies must match.
+- Conversion wallets must match the quote's source and target currencies.
+- Quote terms remain fixed after issue.
+- Quote expiry is checked at execution after acquiring the relevant locks.
+- Conversion target amounts must equal the rounded quote calculation.
+- Successful conversions require a posted ledger transaction of type `fx_conversion`.
+- Conversion records, ledger postings and wallet updates commit atomically.
+
+### Ledger posting and reversals
+
+- Posting requires at least two entries and balanced debits and credits within each currency.
+- Posted transactions and their entries cannot be edited or deleted.
+- Entries can change only while their transaction is draft.
+- Account currency and accounting type cannot change after posted entries exist.
 - A wallet-linked account's wallet association cannot change.
-- Platform ledger accounts have no wallet_id.
-- Beneficiary records referenced by payments cannot be edited or deleted.
+- Full reversals reference posted originals and swap their debit and credit entries.
+- Payout reversals retain the original payment relationship.
+- Duplicate payout processing and settlement postings are prevented.
+- Sufficient funds are checked under lock before processing money movements.
 
-### FX conversions
+### Payout status and auditing
 
-- Source and target currencies must differ.
-- Source and target wallets must match the quote's currencies.
-- Quote financial terms cannot change after issue.
-- A quote must be accepted before expiry and can produce only one successful conversion.
-- Monetary amounts use NUMERIC(20,2), and exchange rates use NUMERIC(24,12).
-- Amounts and rates must be positive.
-- The target amount is calculated from the source amount and rate, rounded to two decimal places, and must remain positive.
-- Each successful conversion links to a posted ledger transaction of type fx_conversion.
-- The conversion record, wallet updates and ledger postings are saved in one database transaction.
-
-### Ledger posting
-
-- Draft ledger transactions may have zero or more entries.
-- Posted ledger transactions require at least two entries.
-- Total debits must equal total credits within every currency represented.
-- Posted ledger transactions and their entries cannot be edited or deleted.
-- Full reversals swap the original debit and credit entries.
-- A reversal must reference a posted original transaction and cannot reference itself.
-- Each original transaction can have only one full reversal.
-- Ledger accounts referenced by entries cannot be deleted.
-- An account's currency and accounting type cannot change after it has posted entries.
-- Wallet updates and ledger posting must occur atomically through controlled routines.
-
-### Payouts and status history
-
-- A pending payment does not reserve or deduct funds.
-- Each payment receives an initial pending status-history record.
-- Payment status changes and history records are saved together.
-- Money-moving transitions include their ledger postings in the same database transaction.
-- payment_id is required for payout-related ledger transactions, including payout reversals.
-- Duplicate payout processing and settlement postings must be prevented.
-- Permitted transitions are pending to processing or failed; processing to completed or failed; failed to reversed after deducted funds are returned; completed to reversed after settled funds are returned.
-- Other transitions are rejected.
-- A payment that fails without a deduction remains failed.
-- Reversing a completed payout requires two compensating ledger transactions.
-- The history record links to the wallet-restoring transaction; both reversal transactions link to the same payment.
-- Failure and reversal history records require a reason.
-- The payment's amount, business, wallet and beneficiary cannot change after creation.
+- Each payment receives its initial pending history record automatically.
+- Only the transitions defined in the design document are permitted.
+- Status changes, history records and associated ledger postings commit together.
+- History `from_status` must match the locked current payment status.
+- History references a posted ledger transaction when the transition moves money.
+- A payment failing before deduction remains failed.
+- A deducted payment is marked reversed only after its refund posting succeeds.
+- Reversing a completed payout requires two compensating ledger transactions committed together.
+- The history row links to the wallet-restoring transaction; both reversal transactions link to the payment.
+- `completed_at` retains the original settlement time after reversal.
 - Retrying a failed payment creates a new payment record.
-- completed_at retains the original settlement time if a completed payment is later reversed.
-- Payment status history is append-only through ordinary application access.
-
-### Audit events and consistency
-
-- Audit events are append-only through ordinary application access.
-- User actors must belong to the business recorded in the event or payment.
-- changed_by and actor_user_id are required for user-triggered events and empty for system-triggered events.
-- Audit entity_id is a generic reference rather than a foreign key to multiple tables.
+- History and audit records are append-only through ordinary application access.
 - Audit details exclude passwords, credentials and full bank account details.
-- Successful changes and their audit events are saved together.
+- Successful changes and audit events commit together.
 - Failed attempts are audited separately after rollback.
-- Locks, restricted privileges and controlled routines will protect financial operations.
-- Reconciliation will compare stored wallet balances with posted ledger totals.
 
-## Scope and remaining work
+## Scope and implementation evidence
 
-This diagram represents an internal database prototype. External banking, external FX settlement, working authentication, fees, overdrafts and partial reversals are outside scope.
+This is an internal database prototype. External banking, external FX settlement, working authentication, fees, overdrafts and partial reversals are outside scope.
 
-Formal normalisation analysis, PostgreSQL implementation and testing remain separate portfolio tasks.
+The full schema was built successfully in `corridorpay_p1_check`. The 35 numbered structural tests produced their reviewed expected outcomes, including 25 intentional constraint errors. The final rollback left all 12 tables empty.
+
+The SQL scripts, execution transcripts and selected screenshots are stored in this portfolio folder. The normalisation analysis is maintained separately. These structural tests do not demonstrate operational money movements, ledger-controlled wallet updates or concurrency control.
