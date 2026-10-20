@@ -1,0 +1,64 @@
+-- Query 1: Measure execution before and after indexing.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT
+    p.payment_id,
+    ben.beneficiary_name,
+    w.currency_code,
+    p.amount,
+    p.status,
+    p.created_at
+FROM payment AS p
+JOIN business AS b
+    ON b.business_id = p.business_id
+JOIN beneficiary AS ben
+    ON ben.beneficiary_id = p.beneficiary_id
+JOIN wallet AS w
+    ON w.wallet_id = p.wallet_id
+WHERE b.country_code = 'NG'
+    AND b.registration_number = 'P2-0001'
+    AND p.status = 'pending'
+ORDER BY p.created_at DESC, p.payment_id DESC
+LIMIT 20;
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1352.23..1352.28 rows=20 width=55) (actual time=1.087..1.091 rows=20 loops=1)
+   Buffers: shared hit=30 read=9
+   ->  Sort  (cost=1352.23..1354.73 rows=1000 width=55) (actual time=1.087..1.089 rows=20 loops=1)
+         Sort Key: p.created_at DESC, p.payment_id DESC
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=30 read=9
+         ->  Hash Join  (cost=65.67..1325.62 rows=1000 width=55) (actual time=0.481..0.919 rows=1000 loops=1)
+               Hash Cond: (p.wallet_id = w.wallet_id)
+               Buffers: shared hit=24 read=9
+               ->  Hash Join  (cost=53.67..1310.98 rows=1000 width=59) (actual time=0.370..0.697 rows=1000 loops=1)
+                     Hash Cond: (p.beneficiary_id = ben.beneficiary_id)
+                     Buffers: shared hit=21 read=9
+                     ->  Nested Loop  (cost=38.67..1293.33 rows=1000 width=45) (actual time=0.250..0.448 rows=1000 loops=1)
+                           Buffers: shared hit=15 read=9
+                           ->  Seq Scan on business b  (cost=0.00..3.50 rows=1 width=8) (actual time=0.003..0.010 rows=1 loops=1)
+                                 Filter: ((country_code = 'NG'::text) AND (registration_number = 'P2-0001'::text))
+                                 Rows Removed by Filter: 99
+                                 Buffers: shared hit=2
+                           ->  Bitmap Heap Scan on payment p  (cost=38.67..1279.83 rows=1000 width=53) (actual time=0.245..0.339 rows=1000 loops=1)
+                                 Recheck Cond: ((business_id = b.business_id) AND (status = 'pending'::text))
+                                 Heap Blocks: exact=13
+                                 Buffers: shared hit=13 read=9
+                                 ->  Bitmap Index Scan on payment_business_status_recent_idx  (cost=0.00..38.42 rows=1000 width=0) (actual time=0.233..0.233 rows=1000 loops=1)
+                                       Index Cond: ((business_id = b.business_id) AND (status = 'pending'::text))
+                                       Buffers: shared read=9
+                     ->  Hash  (cost=10.00..10.00 rows=400 width=30) (actual time=0.101..0.101 rows=400 loops=1)
+                           Buckets: 1024  Batches: 1  Memory Usage: 33kB
+                           Buffers: shared hit=6
+                           ->  Seq Scan on beneficiary ben  (cost=0.00..10.00 rows=400 width=30) (actual time=0.002..0.038 rows=400 loops=1)
+                                 Buffers: shared hit=6
+               ->  Hash  (cost=7.00..7.00 rows=400 width=12) (actual time=0.089..0.089 rows=400 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 27kB
+                     Buffers: shared hit=3
+                     ->  Seq Scan on wallet w  (cost=0.00..7.00 rows=400 width=12) (actual time=0.013..0.038 rows=400 loops=1)
+                           Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=347 read=1
+ Planning Time: 1.972 ms
+ Execution Time: 1.294 ms
+(39 rows)
+

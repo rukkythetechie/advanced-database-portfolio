@@ -1,0 +1,10 @@
+-- Support filtering by business and status,
+-- followed by newest payments first.
+CREATE INDEX payment_business_status_recent_idx
+ON payment (
+    business_id,
+    status,
+    created_at DESC,
+    payment_id DESC
+);
+CREATE INDEX

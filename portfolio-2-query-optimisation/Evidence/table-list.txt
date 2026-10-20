@@ -1,0 +1,17 @@
+                 List of relations
+ Schema |          Name          | Type  |  Owner   
+--------+------------------------+-------+----------
+ public | audit_event            | table | corridor
+ public | beneficiary            | table | corridor
+ public | business               | table | corridor
+ public | business_user          | table | corridor
+ public | fx_conversion          | table | corridor
+ public | fx_quote               | table | corridor
+ public | ledger_account         | table | corridor
+ public | ledger_entry           | table | corridor
+ public | ledger_transaction     | table | corridor
+ public | payment                | table | corridor
+ public | payment_status_history | table | corridor
+ public | wallet                 | table | corridor
+(12 rows)
+
