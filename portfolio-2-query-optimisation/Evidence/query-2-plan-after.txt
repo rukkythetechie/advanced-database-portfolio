@@ -1,0 +1,25 @@
+-- Query 2: Measure status-history lookup performance.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT
+    history_id,
+    payment_id,
+    from_status,
+    to_status,
+    changed_at,
+    actor_type,
+    changed_by,
+    reason
+FROM payment_status_history
+WHERE payment_id = 1
+ORDER BY changed_at, history_id;
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using payment_history_payment_time_idx on payment_status_history  (cost=0.42..8.44 rows=1 width=118) (actual time=0.134..0.135 rows=1 loops=1)
+   Index Cond: (payment_id = 1)
+   Buffers: shared hit=4 read=3
+ Planning:
+   Buffers: shared hit=122 read=1
+ Planning Time: 0.627 ms
+ Execution Time: 0.588 ms
+(7 rows)
+

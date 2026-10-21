@@ -7,3 +7,11 @@ ON payment (
     created_at DESC,
     payment_id DESC
 );
+
+-- Support payment-history lookups in event order.
+CREATE INDEX payment_history_payment_time_idx
+ON payment_status_history (
+    payment_id,
+    changed_at,
+    history_id
+);

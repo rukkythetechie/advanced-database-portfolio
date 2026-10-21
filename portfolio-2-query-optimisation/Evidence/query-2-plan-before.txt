@@ -1,0 +1,30 @@
+-- Query 2: Measure status-history lookup performance.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT
+    history_id,
+    payment_id,
+    from_status,
+    to_status,
+    changed_at,
+    actor_type,
+    changed_by,
+    reason
+FROM payment_status_history
+WHERE payment_id = 1
+ORDER BY changed_at, history_id;
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=2890.01..2890.02 rows=1 width=118) (actual time=11.032..11.033 rows=1 loops=1)
+   Sort Key: changed_at, history_id
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=1646
+   ->  Seq Scan on payment_status_history  (cost=0.00..2890.00 rows=1 width=118) (actual time=0.021..10.974 rows=1 loops=1)
+         Filter: (payment_id = 1)
+         Rows Removed by Filter: 99999
+         Buffers: shared hit=1640
+ Planning:
+   Buffers: shared hit=100
+ Planning Time: 0.440 ms
+ Execution Time: 11.088 ms
+(12 rows)
+

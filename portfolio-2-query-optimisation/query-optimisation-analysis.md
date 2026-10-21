@@ -91,5 +91,68 @@ record planning and execution times separately.
 - `Evidence/query-1-plan-after.txt`
 - Selected before-and-after screenshots in `Evidence/`
 
+## Query 2: Payment status history
+
+This query retrieves the history of payment 1, ordered by event
+timestamp and history ID. It returned the expected initial
+pending record.
+
+### Before indexing
+
+PostgreSQL scanned all 100,000 history records, discarded
+99,999 non-matching rows and sorted the remaining result.
+
+The captured execution time was 11.088 ms.
+Execution used 1,646 shared buffer hits.
+
+### Index added
+
+The index `payment_history_payment_time_idx` contains
+payment_id, changed_at and history_id, in that order.
+
+The first column supports finding a payment's history.
+The remaining columns match the requested event order.
+
+### After indexing
+
+PostgreSQL used an Index Scan with payment_id = 1 as the
+index condition. The separate sort was no longer needed.
+
+The captured execution time was 0.588 ms.
+Execution used 4 shared buffer hits and 3 shared buffer reads.
+
+### Comparison
+
+| Measure | Before index | After index |
+| :--- | ---: | ---: |
+| Execution time | 11.088 ms | 0.588 ms |
+| Access method | Sequential scan | Index scan |
+| Rows removed by filter | 99,999 | No filter removals reported |
+| Separate sort | Yes | No |
+| Execution buffers | 1,646 shared hits | 4 shared hits and 3 shared reads |
+
+Execution was about 19 times faster in these captured runs.
+
+### Limits and trade-offs
+
+Each sample payment has only one history record. This test
+demonstrates finding one record within a large history table.
+It does not test sorting a long history for one payment.
+
+The timings represent individual runs and may vary with caching
+and system activity. The index also requires storage and
+maintenance when history records are inserted.
+
+### Evidence
+
+- `query-2.sql`
+- `query-2-plan.sql`
+- `Evidence/query-2-results.txt`
+- `Evidence/query-2-index-creation.txt`
+- `Evidence/query-2-plan-before.txt`
+- `Evidence/query-2-plan-after.txt`
+- `Evidence/query-2-plan-before-2026-10-21.png`
+- `Evidence/query-2-plan-after-2026-10-21.png`
+
 The overall performance comparison for Portfolio 2 is still
 in progress.
