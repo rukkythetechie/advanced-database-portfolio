@@ -1,0 +1,44 @@
+-- Query 1: Recent pending payments for one business.
+SELECT
+    p.payment_id,
+    ben.beneficiary_name,
+    w.currency_code,
+    p.amount,
+    p.status,
+    p.created_at
+FROM payment AS p
+JOIN business AS b
+    ON b.business_id = p.business_id
+JOIN beneficiary AS ben
+    ON ben.beneficiary_id = p.beneficiary_id
+JOIN wallet AS w
+    ON w.wallet_id = p.wallet_id
+WHERE b.country_code = 'NG'
+    AND b.registration_number = 'P2-0001'
+    AND p.status = 'pending'
+ORDER BY p.created_at DESC, p.payment_id DESC
+LIMIT 20;
+ payment_id |   beneficiary_name    | currency_code | amount | status  |       created_at       
+------------+-----------------------+---------------+--------+---------+------------------------
+        751 | Sample Supplier 1 USD | USD           | 110.00 | pending | 2026-10-20 06:00:00+00
+        501 | Sample Supplier 1 GBP | GBP           | 110.00 | pending | 2026-10-20 06:00:00+00
+        251 | Sample Supplier 1 CAD | CAD           | 110.00 | pending | 2026-10-20 06:00:00+00
+          1 | Sample Supplier 1 NGN | NGN           | 110.00 | pending | 2026-10-20 06:00:00+00
+        752 | Sample Supplier 1 USD | USD           | 120.00 | pending | 2026-10-20 00:00:00+00
+        502 | Sample Supplier 1 GBP | GBP           | 120.00 | pending | 2026-10-20 00:00:00+00
+        252 | Sample Supplier 1 CAD | CAD           | 120.00 | pending | 2026-10-20 00:00:00+00
+          2 | Sample Supplier 1 NGN | NGN           | 120.00 | pending | 2026-10-20 00:00:00+00
+        753 | Sample Supplier 1 USD | USD           | 130.00 | pending | 2026-10-19 18:00:00+00
+        503 | Sample Supplier 1 GBP | GBP           | 130.00 | pending | 2026-10-19 18:00:00+00
+        253 | Sample Supplier 1 CAD | CAD           | 130.00 | pending | 2026-10-19 18:00:00+00
+          3 | Sample Supplier 1 NGN | NGN           | 130.00 | pending | 2026-10-19 18:00:00+00
+        754 | Sample Supplier 1 USD | USD           | 140.00 | pending | 2026-10-19 12:00:00+00
+        504 | Sample Supplier 1 GBP | GBP           | 140.00 | pending | 2026-10-19 12:00:00+00
+        254 | Sample Supplier 1 CAD | CAD           | 140.00 | pending | 2026-10-19 12:00:00+00
+          4 | Sample Supplier 1 NGN | NGN           | 140.00 | pending | 2026-10-19 12:00:00+00
+        755 | Sample Supplier 1 USD | USD           | 150.00 | pending | 2026-10-19 06:00:00+00
+        505 | Sample Supplier 1 GBP | GBP           | 150.00 | pending | 2026-10-19 06:00:00+00
+        255 | Sample Supplier 1 CAD | CAD           | 150.00 | pending | 2026-10-19 06:00:00+00
+          5 | Sample Supplier 1 NGN | NGN           | 150.00 | pending | 2026-10-19 06:00:00+00
+(20 rows)
+

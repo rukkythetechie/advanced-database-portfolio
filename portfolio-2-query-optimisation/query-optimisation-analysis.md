@@ -154,5 +154,73 @@ maintenance when history records are inserted.
 - `Evidence/query-2-plan-before-2026-10-21.png`
 - `Evidence/query-2-plan-after-2026-10-21.png`
 
-The overall performance comparison for Portfolio 2 is still
-in progress.
+## Query 3: Pending payment totals by currency
+
+This report counts pending payments and totals their amounts
+separately for each currency. It joins payments to wallets to
+obtain the currency.
+
+Each currency returned 25,000 payments with a total pending
+amount of 33,875,000.00. These totals match the sample data:
+each currency has 100 wallets, with 250 payments per wallet.
+Each wallet's payment amounts run from 110.00 to 2,600.00,
+in increments of 10.00.
+
+The totals represent pending instructions, not settled payments
+or wallet balances. Amounts in different currencies are not
+combined.
+
+### Execution plan
+
+PostgreSQL used sequential scans on the payment and wallet
+tables, followed by a hash join and a hash aggregate.
+It then sorted the four currency groups.
+
+The captured execution time was 34.188 ms, with 1,238 shared
+buffer hits during execution.
+
+All 100,000 payments contribute to this report because every
+sample payment is pending. Reading the full payment table is
+therefore reasonable. The existing indexes were available,
+but PostgreSQL chose sequential scans for this query.
+
+No additional index was created for this report. This example
+shows that a sequential scan alone is not evidence of a
+performance problem. A different data distribution or a more
+selective report could produce a different plan.
+
+### Evidence
+
+- `query-3.sql`
+- `Evidence/query-3-report-and-plan.txt`
+- `Evidence/query-3-currency-totals-2026-10-22.png`
+
+## Result checks
+
+Queries 1 and 2 were rerun after indexing. Their complete
+captured outputs were compared with the original outputs
+using `diff -s`.
+
+Both comparisons reported identical files. For these tested
+queries and this dataset, the indexes preserved the returned
+values and ordering.
+
+The comparison evidence is saved in:
+
+- `Evidence/query-1-results-after.txt`
+- `Evidence/query-1-result-comparison.txt`
+- `Evidence/query-2-results-after.txt`
+- `Evidence/query-2-result-comparison.txt`
+
+## Findings
+
+The two targeted lookups benefited from indexes. Query 1
+avoided scanning the full payment table, while Query 2 used
+an index scan and no longer needed a separate sort.
+
+The currency report needed every payment, so PostgreSQL
+continued to use a sequential scan.
+
+These are individual captured measurements on sample data.
+They demonstrate the observed plans and timings rather than
+a controlled benchmark or guaranteed production performance.

@@ -1,0 +1,1 @@
+Files portfolio-2-query-optimisation/Evidence/query-2-results.txt and portfolio-2-query-optimisation/Evidence/query-2-results-after.txt are identical
