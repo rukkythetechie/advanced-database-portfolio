@@ -1,0 +1,128 @@
+-- Session B: compete for the wallet used by session A.
+\set ON_ERROR_STOP on
+\timing on
+Timing is on.
+SET application_name = 'corridor_p3_B';
+SET
+Time: 0.267 ms
+BEGIN ISOLATION LEVEL READ COMMITTED;
+BEGIN
+Time: 0.116 ms
+SELECT
+    p.payment_id AS test_payment_id,
+    p.business_id AS test_business_id,
+    p.wallet_id AS test_wallet_id,
+    p.initiated_by AS test_user_id,
+    p.amount AS requested_amount,
+    t.ledger_transaction_id AS test_transaction_id
+FROM payment AS p
+JOIN ledger_transaction AS t ON t.payment_id = p.payment_id
+WHERE t.description = 'Concurrency test B'
+  AND t.status = 'draft'
+  AND p.status = 'pending'
+FOR UPDATE OF p
+\gset
+Time: 1.664 ms
+-- This call should wait while A holds the wallet lock.
+-- After A commits, B should see the remaining 30000.00.
+\set ON_ERROR_STOP off
+SELECT post_ledger_transaction(:test_transaction_id);
+psql:/tmp/concurrency-session-b.sql:28: ERROR:  Wallet 1 has an invalid or insufficient balance
+CONTEXT:  PL/pgSQL function apply_ledger_posting() line 111 at RAISE
+SQL statement "UPDATE ledger_transaction
+    SET status = 'posted',
+        posted_at = clock_timestamp()
+    WHERE ledger_transaction_id = p_transaction_id"
+PL/pgSQL function post_ledger_transaction(bigint) line 19 at SQL statement
+Time: 208831.618 ms (03:28.832)
+\set posting_failed :ERROR
+\set posting_sqlstate :SQLSTATE
+\set ON_ERROR_STOP on
+\if :posting_failed
+    ROLLBACK;
+ROLLBACK
+Time: 0.805 ms
+    -- Record the failed attempt after rollback.
+    BEGIN ISOLATION LEVEL READ COMMITTED;
+BEGIN
+Time: 0.173 ms
+    SELECT payment_id
+    FROM payment
+    WHERE payment_id = :test_payment_id
+      AND status = 'pending'
+    FOR UPDATE
+    \gset
+Time: 0.673 ms
+    -- Check the expected state before classifying the failure.
+    SELECT
+        balance AS remaining_balance,
+        (
+            balance = 30000.00
+            AND balance < :requested_amount
+            AND :'posting_sqlstate' = 'P0001'
+            AND EXISTS (
+                SELECT 1
+                FROM ledger_transaction
+                WHERE description = 'Concurrency test A'
+                  AND status = 'posted'
+            )
+        ) AS expected_funds_failure
+    FROM wallet
+    WHERE wallet_id = :test_wallet_id
+    FOR NO KEY UPDATE
+    \gset
+Time: 0.714 ms
+    \if :expected_funds_failure
+        UPDATE payment
+        SET status = 'failed'
+        WHERE payment_id = :test_payment_id;
+UPDATE 1
+Time: 0.894 ms
+        INSERT INTO payment_status_history (
+            payment_id, from_status, to_status,
+            actor_type, reason
+        )
+        VALUES (
+            :test_payment_id, 'pending', 'failed', 'system',
+            'Insufficient funds after concurrency test A committed'
+        );
+INSERT 0 1
+Time: 1.632 ms
+        INSERT INTO audit_event (
+            business_id, actor_type, actor_user_id,
+            action, entity_type, entity_id, outcome, details
+        )
+        VALUES (
+            :test_business_id, 'user', :test_user_id,
+            'concurrency_payment_processing', 'payment',
+            :test_payment_id, 'failure',
+            '{"test": "B", "currency": "NGN", "amount": 70000.00,
+              "reason": "insufficient_funds"}'::JSONB
+        );
+INSERT 0 1
+Time: 1.979 ms
+        COMMIT;
+COMMIT
+Time: 1.264 ms
+        SELECT
+            p.status AS payment_status,
+            t.status AS ledger_status,
+            w.balance AS remaining_wallet_balance
+        FROM payment AS p
+        JOIN ledger_transaction AS t ON t.payment_id = p.payment_id
+        JOIN wallet AS w ON w.wallet_id = p.wallet_id
+        WHERE t.ledger_transaction_id = :test_transaction_id;
+ payment_status | ledger_status | remaining_wallet_balance 
+----------------+---------------+--------------------------
+ failed         | draft         |                 30000.00
+(1 row)
+
+Time: 0.469 ms
+    \else
+        ROLLBACK;
+        \echo 'Unexpected failure state: investigate before continuing.'
+    \endif
+\else
+    ROLLBACK;
+    \echo 'Unexpected success: B was rolled back; investigate the test.'
+\endif

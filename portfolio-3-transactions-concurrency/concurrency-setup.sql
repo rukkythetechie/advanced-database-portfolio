@@ -1,0 +1,135 @@
+-- Corridor Pay: competing-payment test fixtures
+-- Run once after the funding demonstration.
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+DO $$
+DECLARE
+    v_business_id BIGINT;
+    v_user_id BIGINT;
+    v_wallet_id BIGINT;
+    v_wallet_account_id BIGINT;
+    v_balance NUMERIC;
+    v_clearing_account_id BIGINT;
+    v_beneficiary_id BIGINT;
+    v_payment_id BIGINT;
+    v_transaction_id BIGINT;
+    v_label TEXT;
+BEGIN
+    SELECT
+        b.business_id,
+        u.user_id,
+        w.wallet_id,
+        a.ledger_account_id,
+        w.balance
+    INTO
+        v_business_id,
+        v_user_id,
+        v_wallet_id,
+        v_wallet_account_id,
+        v_balance
+    FROM business AS b
+    JOIN business_user AS u ON u.business_id = b.business_id
+    JOIN wallet AS w ON w.business_id = b.business_id
+    JOIN ledger_account AS a ON a.wallet_id = w.wallet_id
+    WHERE b.country_code = 'NG'
+      AND b.registration_number = 'P3-LEDGER-001'
+      AND u.email = 'ledger-admin@example.com'
+      AND w.currency_code = 'NGN'
+    FOR NO KEY UPDATE OF w;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Funding test fixtures were not found';
+    END IF;
+
+    IF v_balance <> 100000.00 THEN
+        RAISE EXCEPTION
+            'This demonstration requires a starting balance of 100000.00';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM ledger_transaction
+        WHERE description IN ('Concurrency test A', 'Concurrency test B')
+    ) THEN
+        RAISE EXCEPTION 'Concurrency fixtures already exist';
+    END IF;
+
+    INSERT INTO ledger_account (
+        account_name, account_type, currency_code
+    )
+    VALUES (
+        'Concurrency Test NGN Clearing', 'liability', 'NGN'
+    )
+    RETURNING ledger_account_id INTO v_clearing_account_id;
+
+    INSERT INTO beneficiary (
+        business_id, beneficiary_name, country_code,
+        currency_code, bank_name, account_reference
+    )
+    VALUES (
+        v_business_id, 'Concurrency Test Supplier',
+        'NG', 'NGN', 'Sample Bank', 'TEST-CONCURRENCY-001'
+    )
+    RETURNING beneficiary_id INTO v_beneficiary_id;
+
+    FOREACH v_label IN ARRAY ARRAY['A', 'B']
+    LOOP
+        INSERT INTO payment (
+            business_id, wallet_id, beneficiary_id,
+            initiated_by, amount
+        )
+        VALUES (
+            v_business_id, v_wallet_id, v_beneficiary_id,
+            v_user_id, 70000.00
+        )
+        RETURNING payment_id INTO v_payment_id;
+
+        INSERT INTO payment_status_history (
+            payment_id, to_status, actor_type, changed_by, reason
+        )
+        VALUES (
+            v_payment_id, 'pending', 'user', v_user_id,
+            'Concurrency test ' || v_label || ' created'
+        );
+
+        INSERT INTO ledger_transaction (
+            transaction_type, description, payment_id
+        )
+        VALUES (
+            'payout_processing',
+            'Concurrency test ' || v_label,
+            v_payment_id
+        )
+        RETURNING ledger_transaction_id INTO v_transaction_id;
+
+        INSERT INTO ledger_entry (
+            ledger_transaction_id, ledger_account_id,
+            entry_type, amount
+        )
+        VALUES
+            (v_transaction_id, v_wallet_account_id,
+             'debit', 70000.00),
+            (v_transaction_id, v_clearing_account_id,
+             'credit', 70000.00);
+    END LOOP;
+END;
+$$;
+
+COMMIT;
+
+-- Both payments should be pending, both postings draft,
+-- and the shared wallet should still hold 100000.00.
+SELECT
+    t.description AS test,
+    p.payment_id,
+    p.amount,
+    p.status AS payment_status,
+    t.status AS ledger_status,
+    w.balance AS wallet_balance
+FROM ledger_transaction AS t
+JOIN payment AS p ON p.payment_id = t.payment_id
+JOIN wallet AS w ON w.wallet_id = p.wallet_id
+WHERE t.description IN ('Concurrency test A', 'Concurrency test B')
+ORDER BY t.description;

@@ -1,0 +1,7 @@
+SELECT t.description AS test, p.amount, p.status AS payment_status, t.status AS ledger_status, w.balance AS wallet_balance FROM ledger_transaction AS t JOIN payment AS p ON p.payment_id = t.payment_id JOIN wallet AS w ON w.wallet_id = p.wallet_id WHERE t.description IN ('Concurrency test A', 'Concurrency test B') ORDER BY t.description;
+        test        |  amount  | payment_status | ledger_status | wallet_balance 
+--------------------+----------+----------------+---------------+----------------
+ Concurrency test A | 70000.00 | processing     | posted        |       30000.00
+ Concurrency test B | 70000.00 | failed         | draft         |       30000.00
+(2 rows)
+

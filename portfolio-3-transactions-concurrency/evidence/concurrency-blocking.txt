@@ -1,0 +1,6 @@
+SELECT blocked.application_name AS waiting_session, blocked.wait_event_type, blocked.wait_event, blocker.application_name AS blocking_session FROM pg_stat_activity AS blocked JOIN pg_stat_activity AS blocker ON blocker.pid = ANY(pg_blocking_pids(blocked.pid)) WHERE blocked.application_name = 'corridor_p3_B';
+ waiting_session | wait_event_type |  wait_event   | blocking_session 
+-----------------+-----------------+---------------+------------------
+ corridor_p3_B   | Lock            | transactionid | corridor_p3_A
+(1 row)
+

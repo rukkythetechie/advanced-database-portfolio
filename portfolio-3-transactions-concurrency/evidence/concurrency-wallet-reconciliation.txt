@@ -1,0 +1,6 @@
+SELECT w.wallet_id, w.currency_code, w.balance AS stored_balance, SUM(CASE e.entry_type WHEN 'credit' THEN e.amount ELSE -e.amount END) AS ledger_balance, w.balance = SUM(CASE e.entry_type WHEN 'credit' THEN e.amount ELSE -e.amount END) AS balances_match FROM wallet AS w JOIN business AS b ON b.business_id = w.business_id JOIN ledger_account AS a ON a.wallet_id = w.wallet_id JOIN ledger_entry AS e ON e.ledger_account_id = a.ledger_account_id JOIN ledger_transaction AS t ON t.ledger_transaction_id = e.ledger_transaction_id WHERE b.registration_number = 'P3-LEDGER-001' AND b.country_code = 'NG' AND w.currency_code = 'NGN' AND t.status = 'posted' GROUP BY w.wallet_id, w.currency_code, w.balance;
+ wallet_id | currency_code | stored_balance | ledger_balance | balances_match 
+-----------+---------------+----------------+----------------+----------------
+         1 | NGN           |       30000.00 |       30000.00 | t
+(1 row)
+
