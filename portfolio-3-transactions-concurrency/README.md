@@ -1,249 +1,314 @@
 # Portfolio 3 — Transactions and Concurrency
 
-## Current checkpoint: 25 October 2026
+## Current checkpoint: 26 October 2026
 
 This portfolio uses Corridor Pay, a simulated cross-border
-payments case study, to demonstrate database transactions
-and concurrency controls.
+payments case study, to demonstrate atomic transactions,
+ledger protections, wallet locking and controlled financial routines.
 
-The implementation currently demonstrates:
+Implemented demonstrations cover:
 
-- Committed wallet funding with balanced ledger entries.
-- Rollback after a later operation fails.
+- Committed wallet funding.
+- Rollback after a later failure.
 - Protection of posted ledger records.
-- Rejection of insufficient-funds postings.
+- Insufficient-funds rejection.
 - Two payments competing for the same wallet.
-- Reconciliation of wallet balances against posted ledger entries.
+- Controlled payment processing and simulated settlement.
+- Full payment reversals through compensating ledger transactions.
+- Internal currency conversion using a saved quote.
+- Restricted backend application access.
+- Reconciliation of stored balances against posted ledger entries.
 
-Financial workflows and application access controls remain
-in progress.
+All business, user and banking details are sample data.
+No real bank transfer, refund or external FX settlement occurs.
 
 ## Environment
 
 - PostgreSQL 16.15.
 - Docker container: `corridor-pg`.
-- Test database: `corridorpay_p3`.
+- Evidence database: `corridorpay_p3`.
 - Base schema: Portfolio 1's 12-table `schema.sql`.
-- All business, user and banking details are sample data.
-- No real bank transfers or external settlement.
 
 ## Files
 
 | File | Purpose |
 | :--- | :--- |
-| ledger-routines.sql | Posting routine and ledger protection triggers |
-| ledger-funding-test.sql | Creates fixtures and commits simulated funding |
-| ledger-rollback-test.sql | Demonstrates rollback after a temporary posting |
+| ledger-routines.sql | Posting engine and ledger protections |
+| ledger-funding-test.sql | Commits simulated funding and verifies accounting results |
+| ledger-rollback-test.sql | Rolls back a posting after a later failure |
 | ledger-protection-tests.sql | Tests four invalid ledger operations |
-| ledger-insufficient-funds-test.sql | Tests rejection when funds are insufficient |
-| concurrency-setup.sql | Creates two competing pending payments |
-| concurrency-session-a.sql | Posts payment A and pauses before commit |
-| concurrency-session-b.sql | Attempts payment B and records its failure after rollback |
-| evidence/ | Captured execution output and supporting screenshots |
+| ledger-insufficient-funds-test.sql | Tests spending beyond the wallet balance |
+| concurrency-setup.sql | Creates two competing payment instructions |
+| concurrency-session-a.sql | Posts A and pauses before commit |
+| concurrency-session-b.sql | Attempts B and records its failure after rollback |
+| payment-routines.sql | Controlled pending-to-processing operation |
+| payment-processing-tests.sql | Successful processing and seven rejection cases |
+| payment-settlement.sql | Simulated processing-to-completed operation |
+| payment-settlement-tests.sql | Settlement, audit, history and duplicate checks |
+| payment-reversal.sql | Full linked reversals of deducted payments |
+| payment-reversal-tests.sql | Seven reversal cases |
+| fx-routines.sql | Quote protection and controlled internal conversion |
+| fx-tests.sql | Successful conversion and rejection checks |
+| application-permissions.sql | Restricted backend role and routine ownership |
+| application-permission-tests.sql | Denied direct writes and permitted routine calls |
+| evidence/ | Installation output, test transcripts and selected screenshots |
 
 ## Ledger implementation
 
-New ledger transactions must begin as drafts.
+Ledger transactions begin as drafts. Posting requires at least
+two entries and equal debits and credits within each currency.
 
-Posting requires at least two entries and equal total debits
-and credits within each currency. Wallet liability accounts
-must match their wallet's currency.
+Posting updates affected wallet balances and marks the ledger
+transaction as posted within the surrounding database transaction.
+The posting function does not independently commit.
 
-The posting operation updates affected wallet balances and
-marks the ledger transaction as posted within the same database
-transaction. It rejects a resulting negative wallet balance.
+Entry changes lock their parent ledger transaction. Posting locks
+that transaction, stabilizes affected ledger accounts and locks
+affected wallets in wallet-ID order.
 
-Entry changes lock their parent ledger transaction. Posting
-also locks that transaction, holds shared locks on affected
-accounts and locks affected wallets in wallet-ID order.
+Wallet liability credits increase the wallet balance; debits
+decrease it. A posting cannot produce a negative wallet balance.
 
-Posted ledger transactions cannot be updated or deleted.
-Entries belonging to posted transactions cannot be changed.
-Account type, currency and wallet linkage cannot change
-once an account has posted entries.
+Posted transactions and their entries cannot be changed or deleted.
+Account type, currency and wallet linkage cannot change once an
+account has posted entries.
 
-Wallet identity, business ownership and currency cannot change
-after creation. Wallets must start at zero, and NaN balances
-are explicitly rejected.
+Wallets start at zero. Their identity, ownership and currency
+remain fixed, and NaN balances are explicitly rejected.
 
-The posting routine does not independently commit. Its changes
-remain part of the surrounding database transaction.
+## Results: funding, rollback and protections
 
-These tests cover selected behaviours, rather than every
-possible operation or concurrent interaction.
+### Committed funding
 
-## Test results
+A funding transaction debited a platform cash asset and credited
+the wallet liability by NGN 100,000.00.
 
-### 1. Committed funding
+The successful audit was saved in the same database transaction.
 
-The funding test created an approved business, an admin user,
-an NGN wallet, a wallet liability account and a cash asset account.
+After commit, the stored wallet balance and posted ledger balance
+were both NGN 100,000.00. Debit and credit totals also matched.
 
-The funding transaction contained:
+### Rollback after a later failure
 
-- Debit cash: NGN 100,000.00.
-- Credit wallet liability: NGN 100,000.00.
+A temporary NGN 10,000.00 funding posting increased the wallet
+to NGN 110,000.00 inside an open transaction.
 
-A successful audit event was inserted in the same database
-transaction. COMMIT saved the changes.
+A later invalid audit outcome caused a constraint error.
+Explicit rollback removed the temporary posting, entries and
+success audit, restoring the wallet to NGN 100,000.00.
 
-Verification showed:
+### Ledger protections
 
-- Stored wallet balance: NGN 100,000.00.
-- Posted ledger balance: NGN 100,000.00.
-- Balance comparison: true.
-- Total debits and credits: NGN 100,000.00 each.
+The tests rejected:
 
-### 2. Rollback after a later failure
+- Posting the same ledger transaction twice.
+- Editing a posted entry.
+- Changing the currency of an account with posted entries.
+- Posting unequal debit and credit totals.
 
-A second database transaction temporarily posted another
-NGN 10,000.00 and inserted a success audit event.
+Savepoints recovered from the expected errors. Final rollback
+preserved the original funding.
 
-Within that transaction, the wallet showed NGN 110,000.00
-and the temporary ledger transaction showed posted.
+### Insufficient funds
 
-A deliberately invalid audit outcome then violated
-`audit_event_outcome_check`. Explicit ROLLBACK undid the
-temporary posting, wallet change and success audit.
+A balanced NGN 120,000.00 posting was rejected against a wallet
+holding NGN 100,000.00.
 
-Verification showed:
+The wallet remained unchanged, the ledger transaction remained
+draft and the payment remained pending. Final rollback removed
+the temporary fixtures.
 
-- Wallet balance restored to NGN 100,000.00.
-- Zero temporary ledger transactions.
-- Zero temporary ledger entries.
-- Zero temporary success audits.
+## Results: competing payments
 
-This demonstrates that a posting remains reversible through
-rollback until its surrounding database transaction commits.
+Two sessions attempted NGN 70,000.00 payments from a wallet
+holding NGN 100,000.00. Both used READ COMMITTED isolation.
 
-### 3. Ledger protection tests
+A posted within an open transaction and paused before commit.
+B then attempted its posting.
 
-Four intentional operations were rejected:
+A third session used `pg_stat_activity` and `pg_blocking_pids()`
+to confirm that B was waiting on a lock held by A.
+The reported wait event was `transactionid`.
 
-1. Posting an already-posted transaction.
-2. Editing a posted ledger entry.
-3. Changing the currency of an account with posted entries.
-4. Posting NGN 100.00 of debits against NGN 90.00 of credits.
+After A committed, B continued, rechecked the remaining funds
+and was rejected.
 
-Savepoints allowed recovery from the expected errors.
-The final rollback left the original funding unchanged:
+B's failed posting was rolled back. Its failed payment status,
+history and failure audit were saved in a separate transaction.
 
-- Wallet balance: NGN 100,000.00.
-- Ledger transactions: one.
-- Ledger entries: two.
-
-### 4. Insufficient funds
-
-The test attempted a balanced posting of NGN 120,000.00
-against a wallet holding NGN 100,000.00.
-
-The posting routine rejected the attempt because the wallet
-could not cover the debit.
-
-After recovery to the savepoint:
-
-- The wallet still held NGN 100,000.00.
-- The ledger transaction remained draft.
-- The payment remained pending.
-
-The final rollback removed all temporary fixtures.
-The original funding remained, with one ledger transaction,
-two ledger entries and no payments.
-
-### 5. Two competing payments
-
-Two separate PostgreSQL sessions attempted payments of
-NGN 70,000.00 each from the same wallet, initially holding
-NGN 100,000.00.
-
-Both sessions used READ COMMITTED isolation.
-
-Session A posted its payment within an open transaction,
-then paused before committing. It saw its own uncommitted
-wallet balance of NGN 30,000.00 and held the wallet row lock.
-
-Session B attempted its posting while A remained open.
-
-A third session inspected `pg_stat_activity` and
-`pg_blocking_pids()`. The result confirmed:
-
-- Waiting session: `corridor_p3_B`.
-- Wait type: `Lock`.
-- Wait event: `transactionid`.
-- Blocking session: `corridor_p3_A`.
-
-After A committed, B continued. Its posting was rejected
-because the remaining NGN 30,000.00 could not cover its
-NGN 70,000.00 payment.
-
-B's failed posting attempt was rolled back. Its failed payment
-status, history record and failure audit were then saved in
-a separate database transaction.
-
-| Test | Payment amount | Payment status | Ledger status |
+| Payment | Amount | Payment status | Ledger status |
 | :--- | ---: | :--- | :--- |
 | A | NGN 70,000.00 | processing | posted |
 | B | NGN 70,000.00 | failed | draft |
 
-Only A's debit was applied. B's draft entries were excluded
-from the posted ledger balance.
+The remaining wallet balance was NGN 30,000.00 and matched
+the posted ledger balance.
 
-Final reconciliation showed:
+The recorded waiting time includes a deliberate manual pause.
+It is not a performance benchmark.
 
-| Measure | Result |
-| :--- | ---: |
-| Stored wallet balance | NGN 30,000.00 |
-| Posted ledger balance | NGN 30,000.00 |
-| Balances match | true |
+This concurrency demonstration exercised the posting engine
+through session scripts. The later financial entry points were
+tested separately; they were not subjected to another two-session run.
 
-This demonstrates that wallet locking and the balance recheck
-prevented both competing debits from succeeding in this test.
+## Results: controlled payment operations
 
-Payment A remains processing. Supplier settlement was not
-demonstrated.
+### Processing
 
-B's recorded waiting time includes the deliberate manual pause.
-It is not a database performance benchmark.
+`process_payment()` checks:
 
-## Transaction and isolation observations
+- The payment is pending.
+- The supplied actor is active, belongs to the business and
+  has an admin or finance role.
+- The business is approved.
+- Wallet and beneficiary ownership and currencies match.
+- Wallet and clearing ledger accounts are suitable.
+- No original processing posting already exists.
 
-### Atomicity
+The routine posts the deduction, changes the status to processing,
+adds history and records a success audit in one transaction.
 
-The rollback demonstration showed that wallet changes, ledger
-records and a success audit could be undone together after
-a later operation failed before commit.
+Tests confirmed valid processing and rejection of duplicate
+processing, a viewer, another business's user, an inactive user,
+an unapproved business, mismatched currency and insufficient funds.
 
-### Consistency
+### Simulated settlement
 
-The posting routine rejected unbalanced entries and attempted
-spending beyond the wallet balance.
+`settle_payment()` validates the actor, payment state, original
+processing entries and cash account.
 
-Reconciliation confirmed that the stored wallet balance matched
-the posted ledger balance after the concurrency test.
+It debits payout clearing and credits platform cash.
+It marks the payment completed, records the completion timestamp
+and saves history and an audit.
 
-### Isolation
+The test confirmed that settlement did not debit the wallet again.
+An invalid cash account and duplicate settlement were rejected.
 
-The concurrency demonstration used READ COMMITTED isolation
-with explicit wallet row locking.
+### Linked reversals
 
-B waited while A held the lock. After A committed, B's balance
-check used the remaining funds and rejected the second debit.
+`reverse_payment()` creates new entries with the original debits
+and credits exchanged.
 
-Other isolation levels and broader concurrent interactions
-have not been tested.
+An unsettled deducted payment requires one reversal.
+A completed payment requires two: settlement first, then processing.
 
-### Committed results
+Processing payments pass through failed before reversed.
+A failed payment without a posted deduction cannot receive a refund.
 
-Queries after commit confirmed the saved funding and final
-payment outcomes. Recovery after a database or host crash
-was not tested.
+Tests confirmed:
 
-## Reproducing the initial tests
+- Processing-payment and failed-payment refunds.
+- Completed-payment refunds with two linked reversals.
+- Preservation of original posted records and completion timestamps.
+- Reconciliation after refunds.
+- Rejection of duplicate refunds and a missing reason.
+- Rejection of a refund where no deduction occurred.
 
-Run these commands in Mac Terminal from the repository root,
-with Docker running.
+Completed-payment reversal represents a confirmed simulated
+return of funds. It does not initiate a real bank refund.
 
-Use a new database name that is not already in use:
+All processing, settlement and reversal test changes were rolled
+back. The committed concurrency wallet remained at NGN 30,000.00.
+
+## Results: internal currency conversion
+
+`execute_fx_quote()` validates the actor, business, wallet ownership,
+currencies and platform asset accounts.
+
+It locks the quote and both wallets, checks expiry after lock
+acquisition and calculates the target amount rounded to two decimals.
+
+Four entries balance independently within the two currencies.
+The wallet changes, posted transaction, conversion record and
+success audit belong to one database transaction.
+
+The test used a sample rate of 0.000752154660 USD per NGN.
+
+| Currency | Starting balance | After conversion | Posted ledger balance |
+| :--- | ---: | ---: | ---: |
+| NGN | 200,000.00 | 40,000.00 | 40,000.00 |
+| USD | 0.00 | 120.34 | 120.34 |
+
+NGN 160,000.00 converted to USD 120.34.
+
+The tests rejected quote reuse, a viewer, identical wallets,
+swapped wallet currencies, an expired quote, an invalid FX account,
+insufficient funds and editing a saved quote.
+
+Rejected attempts left no partial conversion or wallet movement.
+Final rollback removed the temporary business and wallets.
+
+Saved quotes are protected against updates and deletes by a trigger.
+Quote deletion and concurrent quote acceptance were not separately
+tested in this checkpoint.
+
+## Results: application permissions
+
+The `corridor_p3_app` role represents a trusted backend,
+not an individual customer.
+
+It can read existing tables and execute these entry points:
+
+- process_payment()
+- settle_payment()
+- reverse_payment()
+- execute_fx_quote()
+
+It cannot directly write financial tables, call the raw posting
+function or create objects in the public schema.
+
+The four entry points use SECURITY DEFINER and belong to
+`corridor_p3_routine_owner`, a non-login, non-superuser role.
+Their search paths place the temporary schema last.
+
+Tests switched to the restricted application role and confirmed
+eight denied operations:
+
+- Direct wallet update.
+- Direct payment status update.
+- Direct ledger transaction insertion.
+- Audit deletion.
+- Payment history deletion.
+- Direct quote update.
+- Calling the raw posting routine.
+- Creating a table in the public schema.
+
+All four permitted routines then executed successfully as the
+restricted role.
+
+Rollback restored the NGN 30,000.00 wallet and removed the
+temporary USD wallet.
+
+## Reproduction order
+
+Use a fresh database to reproduce the complete sequence.
+The scripts are not all intended for repeated installation.
+
+1. Build Portfolio 1's schema.
+2. Install ledger-routines.sql.
+3. Run ledger-funding-test.sql once.
+4. Run ledger-rollback-test.sql.
+5. Run ledger-protection-tests.sql.
+6. Run ledger-insufficient-funds-test.sql.
+7. Run concurrency-setup.sql once.
+8. Run sessions A and B with the blocking inspection described below.
+9. Install payment-routines.sql.
+10. Install payment-settlement.sql.
+11. Install payment-reversal.sql.
+12. Install fx-routines.sql.
+13. Run the payment processing, settlement, reversal and FX tests.
+14. Install application-permissions.sql.
+15. Run application-permission-tests.sql.
+
+Steps before the concurrency demonstration expect NGN 100,000.00.
+Later fixture-dependent tests expect the committed NGN 30,000.00
+balance and payment A in processing.
+
+### Build and run commands
+
+Run from the repository root with Docker running.
+
+Create a new database using a name not already in use:
 
 ```bash
 docker exec corridor-pg createdb -U corridor corridorpay_p3_reproduce
@@ -255,183 +320,126 @@ Build the base schema:
 docker exec -i corridor-pg psql -X -v ON_ERROR_STOP=1 --single-transaction -U corridor -d corridorpay_p3_reproduce < portfolio-1-database-design/schema.sql
 ```
 
-Install the routines once:
+For each installation file in the order above, use this pattern,
+replacing `FILE.sql` with the listed filename:
 
 ```bash
-docker exec -i corridor-pg psql -X -v ON_ERROR_STOP=1 --single-transaction -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/ledger-routines.sql
+docker exec -i corridor-pg psql -X -v ON_ERROR_STOP=1 --single-transaction -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/FILE.sql
 ```
 
-Run the funding demonstration once:
+For each non-interactive test or setup file, use:
 
 ```bash
-docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/ledger-funding-test.sql
+docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/FILE.sql
 ```
 
-Run the rollback demonstration:
+Replace `FILE.sql` before running these commands.
+Test scripts manage their own transactions.
 
-```bash
-docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/ledger-rollback-test.sql
-```
+### Interactive concurrency sequence
 
-Run the protection tests:
-
-```bash
-docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/ledger-protection-tests.sql
-```
-
-Run the insufficient-funds test:
-
-```bash
-docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/ledger-insufficient-funds-test.sql
-```
-
-Expected intentional errors:
-
-- One audit constraint error in the rollback demonstration.
-- Four rejection errors in the protection tests.
-- One insufficient-funds error in the insufficient-funds test.
-
-Other errors require investigation.
-
-After these tests, the wallet should still hold NGN 100,000.00,
-with one ledger transaction and two entries.
-
-## Reproducing the concurrency demonstration
-
-Continue in the reproduction database after the initial tests.
-
-Create the competing-payment fixtures once:
-
-```bash
-docker exec -i corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce < portfolio-3-transactions-concurrency/concurrency-setup.sql
-```
-
-Copy both session scripts into the container:
+Copy the two session scripts into Docker:
 
 ```bash
 docker cp portfolio-3-transactions-concurrency/concurrency-session-a.sql corridor-pg:/tmp/concurrency-session-a.sql
 docker cp portfolio-3-transactions-concurrency/concurrency-session-b.sql corridor-pg:/tmp/concurrency-session-b.sql
 ```
 
-Start Session A in one Terminal tab:
+Run A in one Terminal tab and leave it at the PAUSED prompt:
 
 ```bash
 docker exec -it corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce -f /tmp/concurrency-session-a.sql
 ```
 
-Leave A at its PAUSED prompt. Do not press Enter yet.
-
-Start Session B in a second Terminal tab:
+Run B in a second Terminal tab:
 
 ```bash
 docker exec -it corridor-pg psql -X -a -v ON_ERROR_STOP=1 -P pager=off -U corridor -d corridorpay_p3_reproduce -f /tmp/concurrency-session-b.sql
 ```
 
-B should wait at its posting call.
-
-In a third Terminal tab, inspect the blocking relationship:
+While B waits, inspect blocking from a third tab:
 
 ```bash
 docker exec corridor-pg psql -X -P pager=off -U corridor -d corridorpay_p3_reproduce -c "SELECT blocked.application_name AS waiting_session, blocked.wait_event_type, blocked.wait_event, blocker.application_name AS blocking_session FROM pg_stat_activity AS blocked JOIN pg_stat_activity AS blocker ON blocker.pid = ANY(pg_blocking_pids(blocked.pid)) WHERE blocked.application_name = 'corridor_p3_B';"
 ```
 
-Expect B to be waiting for a lock held by A.
+After confirming B is waiting on A, return to A and press Enter.
+Inspect A's commit and B's rejection before continuing.
 
-Return to A and press Enter once to commit.
-B should then reject its posting and record the failed attempt.
+The `-f` option allows A's interactive prompt to read Terminal input.
 
-Verify both outcomes:
+## Evidence and validation
 
-```bash
-docker exec corridor-pg psql -X -P pager=off -U corridor -d corridorpay_p3_reproduce -c "SELECT t.description AS test, p.amount, p.status AS payment_status, t.status AS ledger_status, w.balance AS wallet_balance FROM ledger_transaction AS t JOIN payment AS p ON p.payment_id = t.payment_id JOIN wallet AS w ON w.wallet_id = p.wallet_id WHERE t.description IN ('Concurrency test A', 'Concurrency test B') ORDER BY t.description;"
-```
+The evidence folder contains installation output, complete test
+transcripts and selected PNG screenshots dated 23, 25 and
+26 October 2026.
 
-Expect A to be processing with a posted ledger transaction,
-B to be failed with a draft ledger transaction, and the wallet
-to hold NGN 30,000.00.
+The initial ledger tests use expected errors and manual inspection.
+The later payment, reversal, FX and permission tests include
+assertions that raise an exception when an expected result fails.
 
-Reconcile the wallet against posted ledger entries:
+A zero process exit code alone is not sufficient evidence.
+Review the transcript, PASS notices and final verification results.
 
-```bash
-docker exec corridor-pg psql -X -P pager=off -U corridor -d corridorpay_p3_reproduce -c "SELECT w.wallet_id, w.currency_code, w.balance AS stored_balance, SUM(CASE e.entry_type WHEN 'credit' THEN e.amount ELSE -e.amount END) AS ledger_balance, w.balance = SUM(CASE e.entry_type WHEN 'credit' THEN e.amount ELSE -e.amount END) AS balances_match FROM wallet AS w JOIN business AS b ON b.business_id = w.business_id JOIN ledger_account AS a ON a.wallet_id = w.wallet_id JOIN ledger_entry AS e ON e.ledger_account_id = a.ledger_account_id JOIN ledger_transaction AS t ON t.ledger_transaction_id = e.ledger_transaction_id WHERE b.registration_number = 'P3-LEDGER-001' AND b.country_code = 'NG' AND w.currency_code = 'NGN' AND t.status = 'posted' GROUP BY w.wallet_id, w.currency_code, w.balance;"
-```
+Session transcripts contain echoed conditional branches.
+Echoed commands do not establish that those branches executed.
 
-Expect both balances to be NGN 30,000.00 and
-`balances_match` to be true.
+Generated identity values may differ between runs because
+sequence values are not restored by rollback.
 
-Use psql's `-f` option for the session scripts so that A can
-accept input at its interactive prompt.
+## Transaction observations
 
-The concurrency demonstration changes committed data.
-Earlier tests that expect NGN 100,000.00 must run before it
-or in a fresh test database.
+- Atomicity: rollback removed related wallet, ledger and audit changes.
+- Consistency: selected balance, ownership, currency and state rules
+  were enforced through constraints and controlled routines.
+- Isolation: explicit wallet locking serialized competing debits
+  under READ COMMITTED.
+- Committed results: later queries confirmed persisted funding
+  and concurrency outcomes.
 
-Generated IDs may differ between runs because sequence values
-are not restored by rollback.
+Crash recovery, other isolation levels, deadlock scenarios and
+broader concurrent workloads were not tested.
 
-## Evidence
+## Scope and limitations
 
-### Initial ledger tests — 23 October 2026
+The application role trusts a backend to supply the authenticated
+business user ID. Passing a user ID is not authentication.
 
-- schema-build.txt
-- ledger-routines-install.txt
-- ledger-funding-test.txt
-- ledger-rollback-test.txt
-- ledger-protection-tests.txt
-- Five supporting PNG screenshots dated 23 October 2026.
+Application reads span businesses. Row-level security and
+tenant-specific read filtering are not implemented.
 
-### Insufficient funds and concurrency — 25 October 2026
+The administrator can prepare fixtures and perform privileged
+writes. The access restrictions are demonstrated for the
+restricted backend role.
 
-- ledger-insufficient-funds-test.txt
-- concurrency-setup.txt
-- concurrency-session-a.txt
-- concurrency-session-b.txt
-- concurrency-blocking.txt
-- concurrency-final-results.txt
-- concurrency-wallet-reconciliation.txt
-- Four supporting PNG screenshots dated 25 October 2026.
+Business onboarding, wallet/account creation, quote issuance
+and initial payment instructions are prepared administratively.
+They do not yet have application entry points.
 
-The captured runs used `corridorpay_p3`. The reproduction
-commands use a separate database to preserve those results.
+The controlled routines enforce their own workflows.
+They do not make every possible privileged table change valid.
 
-The scripts are demonstrations with manual result inspection,
-not a complete automated assertion-based test suite.
-A zero process exit code alone does not prove that every
-expected outcome occurred.
+Failure auditing after rollback is demonstrated in concurrency
+session B. Other rejected calls raise errors; a caller must
+separately record a failure after rollback if required.
 
-Session transcripts include echoed SQL and psql conditional
-branches. Echoed commands alone do not establish execution;
-returned results and verification queries show the outcomes.
+Exactly one ledger account per wallet and automatic initial
+payment history are not enforced globally.
 
-## Remaining work and limits
+Real bank integration, authentication, external FX settlement,
+fees, overdrafts and partial reversals are outside scope.
+Database atomicity does not make an external bank operation atomic.
 
-- Extend coverage of additional ledger cases.
-- Implement controlled financial operations and business-role checks.
-- Restrict application access to direct balance and financial-table writes.
-- Implement controlled payment transitions and linked reversals.
-- Implement quote execution and currency-conversion checks.
-- Extend failed-attempt auditing beyond the demonstrated concurrency case.
-- Extend reconciliation and complete the technical reflection.
-
-The test admin's role and business approval status are stored
-data at this checkpoint. These tests do not demonstrate
-permission enforcement.
-
-The generic posting engine checks accounting balance.
-It does not yet validate the complete business meaning of
-every funding, payout, conversion or reversal.
-
-Payment status changes, history records and audits in the
-concurrency demonstration are coordinated by the test scripts.
-They are not yet enforced through a complete payment workflow.
-
-Database atomicity does not establish atomicity with an
-external bank or payment partner.
+Final assessment review and individual reflection remain to
+be completed.
 
 ## References
 
 PostgreSQL 16 documentation:
 
+- [Transactions](https://www.postgresql.org/docs/16/tutorial-transactions.html)
 - [Explicit Locking](https://www.postgresql.org/docs/16/explicit-locking.html)
 - [Transaction Isolation](https://www.postgresql.org/docs/16/transaction-iso.html)
+- [Privileges](https://www.postgresql.org/docs/16/ddl-priv.html)
+- [CREATE FUNCTION](https://www.postgresql.org/docs/16/sql-createfunction.html)
 - [psql](https://www.postgresql.org/docs/16/app-psql.html)

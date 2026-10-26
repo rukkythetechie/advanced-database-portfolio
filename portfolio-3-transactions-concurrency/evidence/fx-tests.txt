@@ -1,0 +1,411 @@
+-- Corridor Pay: internal FX conversion tests
+-- All test records and movements are rolled back.
+\set ON_ERROR_STOP on
+BEGIN;
+BEGIN
+CREATE FUNCTION pg_temp.expect_fx_rejection(
+    p_quote BIGINT,
+    p_source BIGINT,
+    p_target BIGINT,
+    p_actor BIGINT,
+    p_source_account BIGINT,
+    p_target_account BIGINT,
+    p_expected TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rejected BOOLEAN := FALSE;
+BEGIN
+    BEGIN
+        PERFORM public.execute_fx_quote(
+            p_quote, p_source, p_target, p_actor,
+            p_source_account, p_target_account
+        );
+    EXCEPTION WHEN raise_exception THEN
+        IF POSITION(p_expected IN SQLERRM) = 0 THEN
+            RAISE;
+        END IF;
+        v_rejected := TRUE;
+        RAISE NOTICE 'PASS: rejected — %', SQLERRM;
+    END;
+
+    IF NOT v_rejected THEN
+        RAISE EXCEPTION 'TEST FAILED: expected rejection: %',
+            p_expected;
+    END IF;
+END;
+$$;
+CREATE FUNCTION
+DO $$
+DECLARE
+    v_business BIGINT;
+    v_admin BIGINT;
+    v_viewer BIGINT;
+    v_ngn BIGINT;
+    v_usd BIGINT;
+    v_ngn_wallet_account BIGINT;
+    v_usd_wallet_account BIGINT;
+    v_ngn_fx BIGINT;
+    v_usd_fx BIGINT;
+    v_funding BIGINT;
+    v_quote BIGINT;
+    v_unused_quote BIGINT;
+    v_expired_quote BIGINT;
+    v_large_quote BIGINT;
+    v_conversion BIGINT;
+    v_posting BIGINT;
+    v_transaction_count BIGINT;
+    v_rejected BOOLEAN;
+BEGIN
+    INSERT INTO business (
+        business_name, country_code, registration_number,
+        contact_email, kyb_status
+    )
+    VALUES (
+        'FX Routine Test', 'NG', 'P3-FX-001',
+        'fx-business@example.com', 'approved'
+    )
+    RETURNING business_id INTO v_business;
+
+    INSERT INTO business_user (
+        business_id, full_name, email, role
+    )
+    VALUES (
+        v_business, 'FX Admin', 'fx-admin@example.com', 'admin'
+    )
+    RETURNING user_id INTO v_admin;
+
+    INSERT INTO business_user (
+        business_id, full_name, email, role
+    )
+    VALUES (
+        v_business, 'FX Viewer', 'fx-viewer@example.com', 'viewer'
+    )
+    RETURNING user_id INTO v_viewer;
+
+    INSERT INTO wallet (business_id, currency_code)
+    VALUES (v_business, 'NGN')
+    RETURNING wallet_id INTO v_ngn;
+
+    INSERT INTO wallet (business_id, currency_code)
+    VALUES (v_business, 'USD')
+    RETURNING wallet_id INTO v_usd;
+
+    INSERT INTO ledger_account (
+        account_name, account_type, currency_code, wallet_id
+    )
+    VALUES ('FX Test NGN Wallet', 'liability', 'NGN', v_ngn)
+    RETURNING ledger_account_id INTO v_ngn_wallet_account;
+
+    INSERT INTO ledger_account (
+        account_name, account_type, currency_code, wallet_id
+    )
+    VALUES ('FX Test USD Wallet', 'liability', 'USD', v_usd)
+    RETURNING ledger_account_id INTO v_usd_wallet_account;
+
+    INSERT INTO ledger_account (
+        account_name, account_type, currency_code
+    )
+    VALUES ('FX Test NGN Platform Asset', 'asset', 'NGN')
+    RETURNING ledger_account_id INTO v_ngn_fx;
+
+    INSERT INTO ledger_account (
+        account_name, account_type, currency_code
+    )
+    VALUES ('FX Test USD Platform Asset', 'asset', 'USD')
+    RETURNING ledger_account_id INTO v_usd_fx;
+
+    INSERT INTO ledger_transaction (
+        transaction_type, description
+    )
+    VALUES ('funding', 'Temporary FX test funding')
+    RETURNING ledger_transaction_id INTO v_funding;
+
+    INSERT INTO ledger_entry (
+        ledger_transaction_id, ledger_account_id,
+        entry_type, amount
+    )
+    VALUES
+        (v_funding, v_ngn_fx, 'debit', 200000.00),
+        (v_funding, v_ngn_wallet_account, 'credit', 200000.00);
+
+    PERFORM post_ledger_transaction(v_funding);
+
+    INSERT INTO fx_quote (
+        business_id, source_currency, target_currency,
+        source_amount, exchange_rate, expires_at
+    )
+    VALUES (
+        v_business, 'NGN', 'USD', 160000.00,
+        0.000752154660, clock_timestamp() + INTERVAL '1 hour'
+    )
+    RETURNING quote_id INTO v_quote;
+
+    INSERT INTO fx_quote (
+        business_id, source_currency, target_currency,
+        source_amount, exchange_rate, expires_at
+    )
+    VALUES (
+        v_business, 'NGN', 'USD', 1000.00,
+        0.000752154660, clock_timestamp() + INTERVAL '1 hour'
+    )
+    RETURNING quote_id INTO v_unused_quote;
+
+    INSERT INTO fx_quote (
+        business_id, source_currency, target_currency,
+        source_amount, exchange_rate, created_at, expires_at
+    )
+    VALUES (
+        v_business, 'NGN', 'USD', 1000.00,
+        0.000752154660,
+        clock_timestamp() - INTERVAL '2 hours',
+        clock_timestamp() - INTERVAL '1 hour'
+    )
+    RETURNING quote_id INTO v_expired_quote;
+
+    INSERT INTO fx_quote (
+        business_id, source_currency, target_currency,
+        source_amount, exchange_rate, expires_at
+    )
+    VALUES (
+        v_business, 'NGN', 'USD', 50000.00,
+        0.000752154660, clock_timestamp() + INTERVAL '1 hour'
+    )
+    RETURNING quote_id INTO v_large_quote;
+
+    -- Valid conversion: NGN 160000.00 becomes USD 120.34.
+    v_conversion := execute_fx_quote(
+        v_quote, v_ngn, v_usd, v_admin, v_ngn_fx, v_usd_fx
+    );
+
+    SELECT ledger_transaction_id INTO v_posting
+    FROM fx_conversion
+    WHERE conversion_id = v_conversion
+      AND quote_id = v_quote
+      AND target_amount = 120.34;
+
+    IF NOT FOUND OR (
+        SELECT balance FROM wallet WHERE wallet_id = v_ngn
+    ) IS DISTINCT FROM 40000.00::NUMERIC OR (
+        SELECT balance FROM wallet WHERE wallet_id = v_usd
+    ) IS DISTINCT FROM 120.34::NUMERIC THEN
+        RAISE EXCEPTION 'TEST FAILED: conversion amounts or balances';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM ledger_transaction
+        WHERE ledger_transaction_id = v_posting
+          AND transaction_type = 'fx_conversion'
+          AND status = 'posted'
+    ) OR (
+        SELECT COUNT(*) FROM ledger_entry
+        WHERE ledger_transaction_id = v_posting
+    ) <> 4 THEN
+        RAISE EXCEPTION 'TEST FAILED: four-entry FX posting';
+    END IF;
+
+    IF EXISTS (
+        SELECT a.currency_code
+        FROM ledger_entry e
+        JOIN ledger_account a
+          ON a.ledger_account_id = e.ledger_account_id
+        WHERE e.ledger_transaction_id = v_posting
+        GROUP BY a.currency_code
+        HAVING SUM(
+            CASE e.entry_type
+                WHEN 'debit' THEN e.amount ELSE -e.amount
+            END
+        ) <> 0
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: currency-level balance';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM audit_event
+        WHERE business_id = v_business
+          AND action = 'execute_fx_quote'
+          AND entity_type = 'fx_conversion'
+          AND entity_id = v_conversion
+          AND outcome = 'success'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: conversion success audit';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: conversion amounts, both wallet balances, four entries, currency balance and audit';
+
+    SELECT COUNT(*) INTO v_transaction_count
+    FROM ledger_transaction;
+
+    -- A quote cannot be accepted twice.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_quote, v_ngn, v_usd, v_admin, v_ngn_fx, v_usd_fx,
+        'FX quote has already been used'
+    );
+
+    -- Viewer permission is rejected.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_unused_quote, v_ngn, v_usd, v_viewer,
+        v_ngn_fx, v_usd_fx,
+        'Conversion requires an active admin or finance user'
+    );
+
+    -- Both wallets must be different.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_unused_quote, v_ngn, v_ngn, v_admin,
+        v_ngn_fx, v_usd_fx,
+        'Conversion requires two different wallets'
+    );
+
+    -- Swapping the wallets must fail their currency checks.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_unused_quote, v_usd, v_ngn, v_admin,
+        v_ngn_fx, v_usd_fx,
+        'Wallet currencies must match'
+    );
+
+    -- Expired quotes cannot execute.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_expired_quote, v_ngn, v_usd, v_admin,
+        v_ngn_fx, v_usd_fx,
+        'FX quote has expired'
+    );
+
+    -- A wallet liability is not a platform FX asset.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_unused_quote, v_ngn, v_usd, v_admin,
+        v_ngn_wallet_account, v_usd_fx,
+        'FX accounts must be platform assets'
+    );
+
+    -- Only NGN 40000 remains; NGN 50000 cannot be converted.
+    PERFORM pg_temp.expect_fx_rejection(
+        v_large_quote, v_ngn, v_usd, v_admin,
+        v_ngn_fx, v_usd_fx,
+        'invalid or insufficient balance'
+    );
+
+    -- Quote terms are immutable.
+    v_rejected := FALSE;
+    BEGIN
+        UPDATE fx_quote
+        SET exchange_rate = 1
+        WHERE quote_id = v_unused_quote;
+    EXCEPTION WHEN raise_exception THEN
+        IF POSITION(
+            'Saved FX quotes cannot be changed or deleted' IN SQLERRM
+        ) = 0 THEN
+            RAISE;
+        END IF;
+        v_rejected := TRUE;
+    END;
+
+    IF NOT v_rejected THEN
+        RAISE EXCEPTION 'TEST FAILED: quote edit accepted';
+    END IF;
+
+    RAISE NOTICE 'PASS: quote edit rejected';
+
+    -- Rejected attempts must not leave partial money movements.
+    IF (
+        SELECT balance FROM wallet WHERE wallet_id = v_ngn
+    ) IS DISTINCT FROM 40000.00::NUMERIC OR (
+        SELECT balance FROM wallet WHERE wallet_id = v_usd
+    ) IS DISTINCT FROM 120.34::NUMERIC OR (
+        SELECT COUNT(*) FROM fx_conversion
+        WHERE business_id = v_business
+    ) <> 1 OR (
+        SELECT COUNT(*) FROM ledger_transaction
+    ) <> v_transaction_count OR (
+        SELECT COUNT(*) FROM audit_event
+        WHERE business_id = v_business
+          AND action = 'execute_fx_quote'
+    ) <> 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: rejected attempt left changes';
+    END IF;
+
+    -- Reconcile both temporary wallets with posted ledger entries.
+    IF EXISTS (
+        SELECT w.wallet_id
+        FROM wallet w
+        JOIN ledger_account a ON a.wallet_id = w.wallet_id
+        JOIN ledger_entry e
+          ON e.ledger_account_id = a.ledger_account_id
+        JOIN ledger_transaction t
+          ON t.ledger_transaction_id = e.ledger_transaction_id
+        WHERE w.business_id = v_business
+          AND t.status = 'posted'
+        GROUP BY w.wallet_id, w.balance
+        HAVING w.balance <> SUM(
+            CASE e.entry_type
+                WHEN 'credit' THEN e.amount ELSE -e.amount
+            END
+        )
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILED: FX wallet reconciliation';
+    END IF;
+
+    RAISE NOTICE
+        'PASS: rejected attempts left no partial changes; both wallets reconcile';
+END;
+$$;
+NOTICE:  PASS: conversion amounts, both wallet balances, four entries, currency balance and audit
+NOTICE:  PASS: rejected — FX quote has already been used
+NOTICE:  PASS: rejected — Conversion requires an active admin or finance user from the approved quote business
+NOTICE:  PASS: rejected — Conversion requires two different wallets
+NOTICE:  PASS: rejected — Wallet currencies must match the FX quote
+NOTICE:  PASS: rejected — FX quote has expired
+NOTICE:  PASS: rejected — FX accounts must be platform assets matching the quote currencies
+NOTICE:  PASS: rejected — Wallet 3 has an invalid or insufficient balance
+NOTICE:  PASS: quote edit rejected
+NOTICE:  PASS: rejected attempts left no partial changes; both wallets reconcile
+DO
+SELECT
+    w.currency_code,
+    w.balance AS stored_balance,
+    SUM(
+        CASE e.entry_type
+            WHEN 'credit' THEN e.amount ELSE -e.amount
+        END
+    ) AS ledger_balance
+FROM wallet w
+JOIN business b ON b.business_id = w.business_id
+JOIN ledger_account a ON a.wallet_id = w.wallet_id
+JOIN ledger_entry e ON e.ledger_account_id = a.ledger_account_id
+JOIN ledger_transaction t
+  ON t.ledger_transaction_id = e.ledger_transaction_id
+WHERE b.country_code = 'NG'
+  AND b.registration_number = 'P3-FX-001'
+  AND t.status = 'posted'
+GROUP BY w.wallet_id, w.currency_code, w.balance
+ORDER BY w.currency_code;
+ currency_code | stored_balance | ledger_balance 
+---------------+----------------+----------------
+ NGN           |       40000.00 |       40000.00
+ USD           |         120.34 |         120.34
+(2 rows)
+
+ROLLBACK;
+ROLLBACK
+SELECT COUNT(*) AS temporary_fx_businesses_remaining
+FROM business
+WHERE country_code = 'NG'
+  AND registration_number = 'P3-FX-001';
+ temporary_fx_businesses_remaining 
+-----------------------------------
+                                 0
+(1 row)
+
+SELECT w.wallet_id, w.currency_code, w.balance
+FROM wallet w
+JOIN business b ON b.business_id = w.business_id
+WHERE b.country_code = 'NG'
+  AND b.registration_number = 'P3-LEDGER-001'
+  AND w.currency_code = 'NGN';
+ wallet_id | currency_code | balance  
+-----------+---------------+----------
+         1 | NGN           | 30000.00
+(1 row)
+
