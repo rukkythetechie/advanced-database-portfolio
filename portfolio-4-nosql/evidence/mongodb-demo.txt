@@ -1,0 +1,215 @@
+PASS: six sample audit events inserted
+
+EXAMPLE EMBEDDED AUDIT DOCUMENT
+{
+  _id: ObjectId('6adf84a2ff1837878df4e9f0'),
+  event_id: 'P4-004',
+  schema_version: 1,
+  source: 'standalone_sample',
+  business_id: 1001,
+  actor: {
+    type: 'user',
+    user_id: 1002
+  },
+  action: 'execute_fx_quote',
+  entity: {
+    type: 'fx_conversion',
+    id: 'sample-fx-1'
+  },
+  outcome: 'success',
+  occurred_at: ISODate('2026-10-26T10:10:00.000Z'),
+  details: {
+    source_currency: 'NGN',
+    source_amount: Decimal128('160000.00'),
+    target_currency: 'USD',
+    target_amount: Decimal128('120.34'),
+    quote_reference: 'sample-quote-1'
+  }
+}
+PASS: recent business events returned in the expected order
+
+QUERY 1: RECENT BUSINESS EVENTS
+[
+  {
+    event_id: 'P4-005',
+    action: 'execute_fx_quote',
+    outcome: 'failure',
+    occurred_at: ISODate('2026-10-26T10:12:00.000Z')
+  },
+  {
+    event_id: 'P4-004',
+    action: 'execute_fx_quote',
+    outcome: 'success',
+    occurred_at: ISODate('2026-10-26T10:10:00.000Z')
+  },
+  {
+    event_id: 'P4-003',
+    action: 'process_payment',
+    outcome: 'failure',
+    occurred_at: ISODate('2026-10-26T10:06:00.000Z')
+  }
+]
+PASS: two failed events found
+
+QUERY 2: FAILED EVENTS
+[
+  {
+    event_id: 'P4-003',
+    action: 'process_payment',
+    details: {
+      reason: 'insufficient_funds'
+    }
+  },
+  {
+    event_id: 'P4-005',
+    action: 'execute_fx_quote',
+    details: {
+      reason: 'quote_expired'
+    }
+  }
+]
+PASS: aggregation accounts for all six events
+
+QUERY 3: COUNTS BY ACTION AND OUTCOME
+[
+  {
+    _id: {
+      action: 'execute_fx_quote',
+      outcome: 'failure'
+    },
+    event_count: 1
+  },
+  {
+    _id: {
+      action: 'execute_fx_quote',
+      outcome: 'success'
+    },
+    event_count: 1
+  },
+  {
+    _id: {
+      action: 'process_payment',
+      outcome: 'failure'
+    },
+    event_count: 1
+  },
+  {
+    _id: {
+      action: 'process_payment',
+      outcome: 'success'
+    },
+    event_count: 1
+  },
+  {
+    _id: {
+      action: 'wallet_funding',
+      outcome: 'success'
+    },
+    event_count: 2
+  }
+]
+PASS: invalid audit outcome rejected
+PASS: duplicate event identifier rejected
+PASS: review note updated
+
+CRUD: UPDATED REVIEW NOTE
+{
+  _id: ObjectId('6adf84a2ff1837878df4e9f5'),
+  note_id: 'P4-NOTE-TEMP',
+  event_id: 'P4-003',
+  reviewed: true,
+  note: 'Reviewed sample rejection'
+}
+PASS: temporary review note deleted
+PASS: audit events retained unchanged
+
+RECENT-EVENT QUERY PLAN
+{
+  stage: 'LIMIT',
+  limitAmount: 3,
+  inputStage: {
+    stage: 'FETCH',
+    inputStage: {
+      stage: 'IXSCAN',
+      keyPattern: {
+        business_id: 1,
+        occurred_at: -1,
+        event_id: -1
+      },
+      indexName: 'business_recent_events',
+      isMultiKey: false,
+      multiKeyPaths: {
+        business_id: [],
+        occurred_at: [],
+        event_id: []
+      },
+      isUnique: false,
+      isSparse: false,
+      isPartial: false,
+      indexVersion: 2,
+      direction: 'forward',
+      indexBounds: {
+        business_id: [
+          '[1001, 1001]'
+        ],
+        occurred_at: [
+          '[MaxKey, MinKey]'
+        ],
+        event_id: [
+          '[MaxKey, MinKey]'
+        ]
+      }
+    }
+  }
+}
+
+QUERY EXECUTION COUNTS
+{
+  returned: 3,
+  documents_examined: 3,
+  index_keys_examined: 3
+}
+
+FINAL COLLECTION COUNTS
+{
+  audit_events: 6,
+  review_notes: 0
+}
+
+AUDIT INDEXES
+[
+  {
+    v: 2,
+    key: {
+      _id: 1
+    },
+    name: '_id_'
+  },
+  {
+    v: 2,
+    key: {
+      event_id: 1
+    },
+    name: 'event_id_unique',
+    unique: true
+  },
+  {
+    v: 2,
+    key: {
+      business_id: 1,
+      occurred_at: -1,
+      event_id: -1
+    },
+    name: 'business_recent_events'
+  },
+  {
+    v: 2,
+    key: {
+      outcome: 1,
+      occurred_at: -1
+    },
+    name: 'outcome_recent_events'
+  }
+]
+
+Portfolio 4 MongoDB demonstration completed.
