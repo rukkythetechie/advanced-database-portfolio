@@ -1,0 +1,10 @@
+ is_standby 
+------------
+ f
+(1 row)
+
+ connected_replicas 
+--------------------
+                  0
+(1 row)
+

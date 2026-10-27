@@ -1,0 +1,5 @@
+{
+  replica_set: null,
+  writable_primary: true,
+  replica_set_hosts: []
+}

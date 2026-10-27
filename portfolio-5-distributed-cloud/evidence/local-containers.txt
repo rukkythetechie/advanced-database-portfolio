@@ -1,0 +1,2 @@
+/corridor-pg | image=postgres:16 | status=running | mounts=volume:/var/lib/postgresql/data 
+/corridor-mongo | image=mongo:7 | status=running | mounts=volume:/data/configdb volume:/data/db 
