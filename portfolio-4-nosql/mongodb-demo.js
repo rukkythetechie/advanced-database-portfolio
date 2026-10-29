@@ -154,7 +154,7 @@ check(events.countDocuments({}) === 6, "six sample audit events inserted");
 
 show("EXAMPLE EMBEDDED AUDIT DOCUMENT", events.findOne(
   { event_id: "P4-004" },
-  { projection: { _id: 0 } }
+  { _id: 0 }
 ));
 
 // Query 1: latest three events for one business.
@@ -209,12 +209,20 @@ try {
 }
 check(validationRejected, "invalid audit outcome rejected");
 
-// Duplicate event identifiers must fail the unique index.
+// Duplicate event identifiers must fail the event_id unique index.
 let duplicateRejected = false;
 try {
-  events.insertOne({ ...samples[0] });
+  events.insertOne({ ...samples[0], _id: new ObjectId() });
 } catch (error) {
-  if (error.code !== 11000) throw error;
+  if (
+    error.code !== 11000 ||
+    !(
+      error.keyPattern?.event_id === 1 ||
+      String(error.message).includes("event_id_unique")
+    )
+  ) {
+    throw error;
+  }
   duplicateRejected = true;
 }
 check(duplicateRejected, "duplicate event identifier rejected");
@@ -238,7 +246,7 @@ check(updated.modifiedCount === 1, "review note updated");
 
 show("CRUD: UPDATED REVIEW NOTE", notes.findOne(
   { note_id: "P4-NOTE-TEMP" },
-  { projection: { _id: 0 } }
+  { _id: 0 }
 ));
 
 const removed = notes.deleteOne({ note_id: "P4-NOTE-TEMP" });

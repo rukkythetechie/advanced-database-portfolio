@@ -1,0 +1,33 @@
+test> 
+test> 
+test> 
+test> | | | [Function: check]
+test> 
+test> | | | PASS: six original audit events are present
+
+test> 
+test> | | | 
+test> 
+test> | | | | PASS: projection excludes the internal identifier
+
+test> 
+test> 
+test> PASS: duplicate-test fixture exists
+
+test> 
+test> 
+test> 
+test> 
+test> | | | | | | | | | | | | | true
+test> 
+test> | | | 
+test> 
+test> | | | PASS: event_id_unique rejected a duplicate with a fresh internal identifier
+
+test> 
+test> | | | PASS: six original audit events remain
+
+test> 
+test> Focused review verification completed.
+
+test> 

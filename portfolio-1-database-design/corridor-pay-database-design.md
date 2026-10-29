@@ -1,403 +1,653 @@
-# **Corridor Pay Database Design**
+# Corridor Pay Database Design
 
-## **1\. Purpose and scope**
+## 1. Purpose and scope
 
-Corridor Pay is a fintech company used as a simulated case study. It provides cross-border payment services to small and mid-sized businesses in Nigeria, Canada, the United Kingdom and the United States. This prototype will demonstrate relational modelling, SQL implementation, a double-entry ledger architecture, atomic money movements and concurrency management.
+Corridor Pay is a fintech company used as a simulated case study.
+It provides cross-border payment services to small and mid-sized
+businesses in Nigeria, Canada, the United Kingdom and the
+United States.
 
-The currencies that are supported are NGN, CAD, GBP, and USD; each business may have only one wallet for each currency. Spending-purpose wallets are not included in this prototype. Overdrafts, payment fees, partial reversals, integration with a real bank, authentication, and external foreign exchange trading are not implemented. Each business user is linked to a single business, and this project also excludes internal compliance and operations workflows.
+The project demonstrates relational modelling, SQL implementation,
+double-entry accounting, atomic financial operations and
+concurrency management.
+
+Supported currencies are NGN, CAD, GBP and USD. Each business may
+have one wallet per currency. Separate spending-purpose wallets
+are outside scope.
+
+Overdrafts, payment fees, partial reversals, real bank integration,
+working customer authentication and external FX settlement are
+not implemented. Each business user belongs to one business.
+Internal compliance and operations workflows are also outside scope.
 
 All business, user and banking details used in testing are sample data.
 
-## **2\. Core business rules**
+### Implementation checkpoints
 
-1\. Each wallet is linked to one business and contains one currency, and the UNIQUE(business\_id, currency\_code) constraint prevents duplicates from being created.
+Portfolio 1 contains the base schema and structural tests completed
+on 19–20 October 2026.
 
-2\. Only approved businesses and active admin or finance users are authorized to initiate payments or currency conversions. Users who have only viewer permissions are not allowed to initiate any money movements.
+Financial routines, transaction tests and restricted application
+permissions were subsequently added in
+[Portfolio 3](../portfolio-3-transactions-concurrency/README.md).
 
-3\. For each payment, the associated wallet, beneficiary, and initiating user must all belong to the same business, and the wallet and beneficiary must use the same currency.
+The dictionary and business rules below describe the intended model.
+Section 9 distinguishes implemented protections from remaining limits.
 
-4\. For currency conversions, both wallets and the initiating user must be associated with the business specified in the quote. Wallet currencies must match those in the quote, and the source and target currencies must differ.
+## 2. Core business rules
 
-5\. A quote can only be accepted once and must be accepted before it expires; after it has been issued, its financial terms become fixed. All the amounts and rates must be positive, and the target amount must remain positive after rounding to two decimal places.
+1. Each wallet belongs to one business and holds one currency.
+   `UNIQUE(business_id, currency_code)` prevents duplicate wallets
+   for the same business and currency.
 
-6\. Every posted ledger transaction must have equal total debits and credits within each currency. Posted entries are immutable, so corrections must use compensating transactions.
+2. Payment processing and currency conversion require an approved
+   business and an active admin or finance user from that business.
+   Viewer users cannot initiate these financial operations.
 
-7\. The ledger is the definitive source of truth, and the wallet's balance is the total amount obtained by subtracting the posted debits from the posted credits on its liability account.
+3. A payment's wallet, beneficiary and initiating user must belong
+   to the same business. The wallet and beneficiary currencies
+   must match.
 
-8\. Wallets begin at zero, and funding is recorded on the ledger rather than being entered as arbitrary opening balances.
+4. A conversion's wallets and initiating user must belong to the
+   business receiving the quote. Wallet currencies must match
+   the quote, and source and target currencies must differ.
 
-9\. Wallet updates, postings, business records, and successful audit events are all committed as part of a single database transaction; if an operation fails, all the changes are rolled back, and the audit events relating to the failed attempt are recorded separately afterwards.
+5. A quote can be executed once and must remain unexpired when
+   executed. Its terms are fixed after issue. Amounts and rates
+   must be positive, and the target amount must remain positive
+   after rounding to two decimal places.
 
-10\. The processing of changes to payout status and of the history records takes place atomically, and where transitions involve the movement of money the relevant ledger postings are included within the same database transaction.
+6. Every posted ledger transaction must have equal total debits
+   and credits within each currency. Posted entries are immutable.
+   Corrections use compensating transactions.
 
-## **3\. Proposed table dictionary**
+7. The ledger is the financial source of truth. A wallet's balance
+   must equal posted credits minus posted debits on its liability
+   account.
 
-PK \= primary key: a unique, non-null identifier.
+8. Wallets begin at zero. Funding is recorded through the ledger,
+   rather than entered as an arbitrary opening balance.
 
-FK \= foreign key: a reference to an existing record.
+9. Related financial records, wallet updates and successful audit
+   events must commit together or roll back together. Failed-attempt
+   audits require a separate transaction after rollback.
 
-Fields are required unless marked optional. The names below are proposed SQL table and column names. The business-user table is named business\_user to distinguish it from SQL’s USER keyword.
+10. Payment status changes and their history records must be atomic.
+    Transitions involving financial postings include those postings
+    in the same database transaction.
 
-### **1\. business**
+## 3. Table dictionary
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| business\_id | PK |
-| business\_name | Registered company name |
-| country\_code | NG, CA, GB or US |
-| registration\_number | Registration reference stored as text |
-| contact\_email | Business contact address; separate from employee login email |
-| kyb\_status | pending, approved or rejected; default pending |
-| created\_at | Registration timestamp |
+PK means primary key: a unique, non-null identifier.
 
-The combination of country\_code and registration\_number must be unique, because registration numbers may overlap across countries. Payment and conversion routines must check that the business is approved; a foreign key only checks that the referenced business exists.
+FK means foreign key: a reference to an existing record.
 
-### **2\. business\_user**
+Fields are required unless marked optional. The business-user table
+is named `business_user` to distinguish it from SQL's `USER` keyword.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| user\_id | PK |
-| business\_id | FK to business |
-| full\_name | Person’s name |
-| email | Unique across the prototype; compare case-insensitively |
+### 3.1 business
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| business_id | PK |
+| business_name | Registered company name |
+| country_code | NG, CA, GB or US |
+| registration_number | Registration reference stored as text |
+| contact_email | Business contact address |
+| kyb_status | pending, approved or rejected; default pending |
+| created_at | Registration timestamp |
+
+The combination of country and registration number is unique,
+because registration numbers may overlap across countries.
+
+A foreign key checks that a business exists. Approval checks
+require additional logic in the financial routines.
+
+### 3.2 business_user
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| user_id | PK |
+| business_id | FK to business |
+| full_name | Person's name |
+| email | Unique across the prototype, compared case-insensitively |
 | role | admin, finance or viewer |
-| is\_active | Whether access is enabled |
-| created\_at | Creation timestamp |
+| is_active | Whether access is enabled |
+| created_at | Creation timestamp |
 
-Admin users can manage business users and beneficiaries and initiate money movements. Finance users can manage beneficiaries and initiate money movements. Viewers have read-only access.
+The intended roles allow admins to manage users and beneficiaries,
+and finance users to manage beneficiaries. Both may initiate
+financial operations. Viewers have read-only access.
 
-Storing a user’s role does not automatically enforce permissions. The relevant routines must check the user’s role and active status before allowing an action. Password storage and working authentication are out of scope for the prototype.
+The implemented financial routines check the supplied user's
+business, role and active status. User-management and beneficiary-
+management application workflows are outside the prototype.
 
-### **3\. wallet**
+Storing a role does not enforce permissions by itself.
+Password storage and working customer authentication are outside scope.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| wallet\_id | PK |
-| business\_id | FK to business |
-| currency\_code | NGN, CAD, GBP or USD |
+### 3.3 wallet
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| wallet_id | PK |
+| business_id | FK to business |
+| currency_code | NGN, CAD, GBP or USD |
 | balance | Exact decimal, non-negative, initially zero |
-| created\_at | Creation timestamp |
+| created_at | Creation timestamp |
 
-The combination of business\_id and currency\_code must be unique, ensuring one wallet per currency per business. Each wallet and its corresponding liability ledger account will be created in the same database transaction, so both are created successfully, or neither is created. Wallet balances can only be changed through controlled ledger-posting routines.
+`UNIQUE(business_id, currency_code)` enforces one wallet per
+currency per business.
 
-### **4\. beneficiary**
+The intended model creates a wallet and its matching liability
+account together. The demonstrations perform this administrative
+setup within a database transaction.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| beneficiary\_id | PK |
-| business\_id | FK to business that saved it |
-| beneficiary\_name | Supplier name |
-| country\_code | NG, CA, GB or US |
-| currency\_code | Receiving currency |
-| bank\_name | Destination bank |
-| account\_reference | Text preserving letters and leading zeros |
-| routing\_reference | Optional text; routing details where needed |
-| created\_at | Creation timestamp |
+Portfolio 3 restricts application writes so financial wallet
+updates pass through controlled routines.
 
-Each beneficiary record represents one supplier’s receiving bank account. Two businesses may independently save the same supplier. Real banking-detail validation is outside scope.
+### 3.4 beneficiary
 
-Once a beneficiary record has been referenced by a payment, it cannot be edited or deleted. Changed bank details require a new beneficiary record, preserving the destination recorded for earlier payments.
+| Field | Meaning or rule |
+| :--- | :--- |
+| beneficiary_id | PK |
+| business_id | FK to business that saved it |
+| beneficiary_name | Supplier name |
+| country_code | NG, CA, GB or US |
+| currency_code | Receiving currency |
+| bank_name | Destination bank |
+| account_reference | Text preserving letters and leading zeros |
+| routing_reference | Optional routing details |
+| created_at | Creation timestamp |
 
-### **5\. fx\_quote**
+Each beneficiary represents one supplier receiving account.
+Two businesses may independently save the same supplier.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| quote\_id | PK |
-| business\_id | FK to business receiving the offer |
-| source\_currency | Currency surrendered |
-| target\_currency | Currency received; different from source |
-| source\_amount | Positive exact amount |
-| exchange\_rate | Positive target-currency units per source unit |
-| created\_at | Offer timestamp |
-| expires\_at | Later than created\_at |
+Real banking-detail validation is outside scope.
 
-Once issued, a quote’s financial terms cannot be changed. For example, using the CBN reference rate of ₦1,329.5138 per US dollar on 25 September 2026, ₦160,000 would convert to \$120.34 after rounding. This historical rate is used for demonstration.
+The intended model preserves destinations used by earlier payments.
+Changed bank details should create a new beneficiary record.
+A dedicated trigger preventing edits to used beneficiaries has
+not been implemented; the restricted application role has no
+direct write access to this table.
 
-Exchange rates are stored with more decimal places than monetary amounts to preserve precision. The conversion routine checks expiry after acquiring the required locks, preventing use of a quote that expires while waiting.
+### 3.5 fx_quote
 
-### **6\. fx\_conversion**
+| Field | Meaning or rule |
+| :--- | :--- |
+| quote_id | PK |
+| business_id | FK to business receiving the offer |
+| source_currency | Currency surrendered |
+| target_currency | Currency received; different from source |
+| source_amount | Positive exact amount |
+| exchange_rate | Positive target-currency units per source unit |
+| created_at | Offer timestamp |
+| expires_at | Later than created_at |
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| conversion\_id | PK |
-| quote\_id | FK to fx\_quote; UNIQUE |
-| business\_id | FK to business |
-| source\_wallet\_id | FK to wallet |
-| target\_wallet\_id | FK to wallet; different from source |
-| initiated\_by | FK to business\_user |
-| target\_amount | Positive source\_amount × exchange\_rate, rounded to two decimal places |
-| ledger\_transaction\_id | FK to ledger\_transaction; UNIQUE |
-| completed\_at | Completion timestamp |
+Portfolio 3 protects issued quotes against changes and deletion.
 
-This table records successful conversions only; failed attempts are recorded as audit events. The source amount and exchange rate come from the linked quote, whose financial terms cannot be changed.
+An illustrative sample rate of NGN 1,329.5138 per USD converts
+NGN 160,000 to USD 120.34 after rounding. This is a demonstration
+value, not a verified market-rate observation.
 
-The conversion record, ledger entries, and both wallet balance updates are saved in a single database transaction, so all changes succeed together, or none take effect. The linked ledger transaction must have a status of posted and a transaction type of fx\_conversion.
+The test routine uses the rounded inverse sample rate of
+0.000752154660 USD per NGN.
 
-### **7\. payment**
+Rates use more decimal places than monetary amounts. The conversion
+routine checks expiry after acquiring the required locks, preventing
+execution of a quote that expires while waiting.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| payment\_id | PK |
-| business\_id | FK to business |
-| wallet\_id | FK to source wallet |
-| beneficiary\_id | FK to destination |
-| initiated\_by | FK to business\_user |
+### 3.6 fx_conversion
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| conversion_id | PK |
+| quote_id | UNIQUE FK to fx_quote |
+| business_id | FK to business |
+| source_wallet_id | FK to wallet |
+| target_wallet_id | FK to wallet; different from source |
+| initiated_by | FK to business_user |
+| target_amount | Positive source amount multiplied by rate, rounded to two decimal places |
+| ledger_transaction_id | UNIQUE FK to ledger_transaction |
+| completed_at | Completion timestamp |
+
+This table records successful conversions.
+
+The source amount and exchange rate come from the linked quote.
+The controlled conversion routine calculates the target amount
+and saves the conversion, ledger entries, wallet updates and
+success audit atomically.
+
+The linked ledger transaction must be posted and have type
+`fx_conversion`. These operational checks belong to Portfolio 3.
+
+Failed attempts require caller-managed audit logging after rollback.
+
+### 3.7 payment
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| payment_id | PK |
+| business_id | FK to business |
+| wallet_id | FK to source wallet |
+| beneficiary_id | FK to destination |
+| initiated_by | FK to business_user |
 | amount | Positive exact amount; no fees |
 | status | pending, processing, completed, failed or reversed |
-| created\_at | Request timestamp |
-| completed\_at | Optional; time settlement succeeded |
+| created_at | Request timestamp |
+| completed_at | Optional; time settlement succeeded |
 
-If a completed payment is later reversed, completed\_at retains the original completion time, while the status history records both events. The payment’s amount, business, source wallet and beneficiary cannot be changed after creation. Retrying a failed payment creates a new payment record.
+Creating a pending payment does not reserve or deduct funds.
 
-During processing, the system locks the source wallet and checks for sufficient funds before deducting money. Creating a pending payment does not reserve or deduct funds.
+Processing locks the relevant records and checks sufficient funds
+before posting the wallet debit.
 
-### **8\. ledger\_account**
+If a completed payment is reversed, `completed_at` retains its
+original completion time. History records both events.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| ledger\_account\_id | PK |
-| account\_name | Readable label |
-| account\_type | asset, liability, equity, income or expense |
-| currency\_code | One supported currency |
-| wallet\_id | Optional UNIQUE FK to wallet; set only for wallet liability accounts |
-| created\_at | Creation timestamp |
+The intended model keeps the amount, business, source wallet and
+beneficiary unchanged after creation. Retrying a failed payment
+creates a new payment record.
 
-Each wallet’s ledger account must be a liability account in the same currency as the wallet. Platform accounts have no wallet\_id: cash accounts are assets, while payout clearing accounts are liabilities.
+A dedicated immutable-payment trigger has not been implemented.
+The restricted application role cannot directly update payment
+records; controlled routines manage their status changes.
 
-For this prototype, each currency has an FX position account classified as an asset. These accounts may carry debit or credit balances and record the platform’s side of internal conversions; customers cannot spend their balances. External FX settlement, valuation and profit or loss accounting are outside scope.
+### 3.8 ledger_account
 
-Once an account has posted entries, you cannot change its currency or accounting type. Accounts referenced by ledger entries cannot be deleted.
+| Field | Meaning or rule |
+| :--- | :--- |
+| ledger_account_id | PK |
+| account_name | Readable label |
+| account_type | asset, liability, equity, income or expense |
+| currency_code | One supported currency |
+| wallet_id | Optional UNIQUE FK to wallet |
+| created_at | Creation timestamp |
 
-Once created, you cannot change a wallet-linked account’s wallet association. This preserves the connection between the wallet and its financial history.
+A wallet-linked account must be a liability account in the same
+currency as its wallet.
 
-### **9\. ledger\_transaction**
+Platform accounts have no wallet reference. Cash accounts are
+assets, while payout clearing accounts are liabilities.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| ledger\_transaction\_id | PK |
-| transaction\_type | funding, fx\_conversion, payout\_processing, payout\_settlement or reversal |
+For this prototype, platform FX position accounts are classified
+as assets. They may carry debit or credit balances and represent
+the platform's side of internal conversions. Customers cannot
+spend these account balances.
+
+External FX settlement, valuation and profit or loss accounting
+are outside scope.
+
+Portfolio 3 protects account properties after posting and prevents
+changes to wallet associations. Foreign keys prevent deletion
+of accounts referenced by entries.
+
+### 3.9 ledger_transaction
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| ledger_transaction_id | PK |
+| transaction_type | funding, fx_conversion, payout_processing, payout_settlement or reversal |
 | description | Explanation |
 | status | draft or posted |
-| payment\_id | Optional FK to payment; required for payout-related postings |
-| reversal\_of\_transaction\_id | Optional UNIQUE self-FK; required for a full reversal |
-| created\_at | Creation timestamp |
-| posted\_at | Optional until posted |
+| payment_id | Optional FK; required for payout-related postings |
+| reversal_of_transaction_id | Optional UNIQUE self-FK; required for reversal |
+| created_at | Creation timestamp |
+| posted_at | Optional until posted |
 
-A ledger transaction can be posted only if it has at least two entries and total debits equal total credits within each currency. Posted transactions and their entries cannot be edited or deleted.
+Posting requires at least two entries and equal total debits
+and credits within each currency.
 
-A full reversal must reference an original posted transaction and swap its debit and credit entries. It cannot reference itself, and each original transaction can have only one full reversal.
+Posted transactions and their entries cannot be edited or deleted
+through the protected implementation.
 
-A payment may have several ledger transactions covering processing, settlement and reversal. The system must prevent duplicate processing or settlement postings through uniqueness rules and checks performed while the payment record is locked.
+A full reversal references an original posted transaction and swaps
+its debit and credit entries. It cannot reference itself, and each
+original transaction can have one full reversal.
 
-### **10\. ledger\_entry**
+A payment may have processing, settlement and reversal transactions.
+Portfolio 3 combines payment locks, checks and uniqueness rules
+to prevent duplicate processing and settlement.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| ledger\_entry\_id | PK |
-| ledger\_transaction\_id | FK to ledger\_transaction |
-| ledger\_account\_id | FK to ledger\_account |
-| entry\_type | debit or credit |
+### 3.10 ledger_entry
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| ledger_entry_id | PK |
+| ledger_transaction_id | FK to ledger_transaction |
+| ledger_account_id | FK to ledger_account |
+| entry_type | debit or credit |
 | amount | Positive exact decimal |
 
-Each entry uses the currency of its linked ledger account. Entries can only be added, edited or removed while their ledger transaction is in draft status.
+Each entry uses its ledger account's currency.
 
-Before posting, the system checks that total debits equal total credits within each currency. Checking individual entry amounts alone cannot establish that the transaction balances.
+Entries may be added, edited or removed only while their transaction
+is a draft. Before posting, aggregate debits and credits must balance
+within each currency.
 
-### **11\. payment\_status\_history**
+Checking individual entry amounts alone cannot establish that
+a transaction balances.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| history\_id | PK; deterministic secondary order for equal timestamps |
-| payment\_id | FK to payment |
-| from\_status | Optional only for initial pending record |
-| to\_status | New status |
-| changed\_at | Transition timestamp |
-| actor\_type | user or system |
-| changed\_by | Optional FK to business\_user; required for user actors |
-| reason | Explanation; required for failure/reversal |
-| ledger\_transaction\_id | Optional FK; required when this transition posts money movements |
+### 3.11 payment_status_history
 
-The application can add status-history records but cannot edit or delete existing ones. Each payment receives an initial pending history record when created. Any linked ledger transaction must relate to the same payment.
+| Field | Meaning or rule |
+| :--- | :--- |
+| history_id | PK; secondary ordering for equal timestamps |
+| payment_id | FK to payment |
+| from_status | Optional only for the initial pending record |
+| to_status | New status |
+| changed_at | Transition timestamp |
+| actor_type | user or system |
+| changed_by | Optional FK; required for user actors |
+| reason | Explanation; required for failure or reversal |
+| ledger_transaction_id | Optional FK to the related posting |
 
-Before changing a status, the system locks the payment record and checks that from\_status matches its current status. For changes triggered by the system, changed\_by remains empty.
+The intended model records initial pending history when a payment
+is created. The demonstrations prepare that initial history
+administratively.
 
-Reversing a completed payout requires two ledger transactions. The history record links to the transaction restoring the wallet balance; both transactions remain linked to the payment through payment\_id.
+Controlled routines lock the payment, check its current state
+and save transition history with the related financial operation.
 
-### **12\. audit\_event**
+Linked ledger transactions must belong to the same payment.
+For system actors, `changed_by` remains empty.
 
-| Field | Meaning / rule |
-| :---- | :---- |
-| audit\_event\_id | PK |
-| business\_id | FK to business concerned |
-| actor\_type | user or system |
-| actor\_user\_id | Optional FK; required for user actors |
-| action | Event name, such as beneficiary\_created |
-| entity\_type | Kind of record concerned |
-| entity\_id | Optional record ID |
+Reversing a completed payment requires two ledger transactions.
+The reversal history links to the transaction restoring the wallet;
+both transactions remain associated with the payment.
+
+The restricted application role cannot directly insert, edit
+or delete history records. Controlled routines insert history.
+
+### 3.12 audit_event
+
+| Field | Meaning or rule |
+| :--- | :--- |
+| audit_event_id | PK |
+| business_id | FK to the business concerned |
+| actor_type | user or system |
+| actor_user_id | Optional FK; required for user actors |
+| action | Event name |
+| entity_type | Kind of record concerned |
+| entity_id | Optional record identifier |
 | outcome | success or failure |
-| details | Structured JSON context; default empty object |
-| occurred\_at | Event timestamp |
+| details | JSON object; default empty object |
+| occurred_at | Event timestamp |
 
-The application can add audit events but cannot edit or delete existing records. When a user triggers an event, that user must belong to the business recorded in the event. For system events, actor\_user\_id remains empty. The details field must exclude passwords, credentials and full bank account details.
+A user actor must belong to the business recorded in the event.
+For system actors, `actor_user_id` remains empty.
 
-Because entity\_id may refer to different tables, one standard foreign key cannot validate every reference. Specific financial relationships will retain their own foreign keys.
+Audit details should exclude passwords, credentials and full bank
+account details.
 
-MongoDB will later demonstrate a document-based model for audit data. Transferring or synchronising events between databases will require a separate design decision.
+Because `entity_id` can refer to different tables, one standard
+foreign key cannot validate every reference. Specific financial
+relationships retain their own foreign keys.
 
-## **4\. Payout transitions and ledger treatment**
+The restricted application role cannot directly insert, edit
+or delete audit records. Controlled routines save success audits.
 
-| Payout transitions | Transition Financial effect |
-| :---- | :---- |
+Portfolio 4 separately demonstrates MongoDB audit documents using
+standalone sample events. Synchronisation between PostgreSQL
+and MongoDB is not implemented.
+
+## 4. Payout transitions and ledger treatment
+
+| Transition | Financial effect |
+| :--- | :--- |
 | Initial → pending | No funds deducted |
 | pending → processing | Debit wallet liability; credit payout clearing liability |
-| pending → failed | No deduction; no reversal |
+| pending → failed | No deduction and no reversal |
 | processing → completed | Debit payout clearing liability; credit platform cash asset |
 | processing → failed | Record failure; deducted funds remain in clearing pending return |
-| failed → reversed | Allowed only if previously deducted funds are returned; reverse the processing posting |
-| completed → reversed | Allowed only after actual return of settled funds; reverse settlement and processing postings |
+| failed → reversed | Return previously deducted funds by reversing processing |
+| completed → reversed | Simulate returned funds by reversing settlement and processing |
 
-Any transition not listed above is rejected. A payout that fails before funds are deducted remains failed. If funds were deducted, the payout is only marked reversed after the refund has been successfully posted.
+These transitions describe the intended lifecycle. The controlled
+routines implement the processing, settlement and reversal paths
+documented in Portfolio 3.
 
-Reversing a completed payout requires two compensating ledger transactions. The first debits cash and credits the payout clearing account to record the returned funds. The second debits clearing and credits the wallet liability account to restore the business’s balance. Both transactions must be saved together with the status update and history record in one database transaction.
+A payment that fails before deduction has no funds to reverse.
+A payment with deducted funds is marked reversed only after its
+refund postings succeed.
 
-The history record links to the transaction that restores the wallet balance. Both ledger transactions remain linked to the payout through payment\_id.
+Reversing a completed payment requires two compensating transactions:
 
-reversed is a final status in this prototype, with no further transitions permitted. Settlement and fund returns are simulated; the database’s atomicity applies only to its own records, not to external bank transfers.
+1. Debit cash and credit clearing to represent returned settled funds.
+2. Debit clearing and credit the wallet liability to restore the balance.
 
-## **5\. Worked ledger examples**
+Both postings, the status update, history and success audit must
+succeed together.
 
-### **Wallet funding: NGN 200,000**
+The history record links to the wallet-restoring transaction.
+Both transactions remain associated with the payment.
+
+`reversed` is a final status in this prototype.
+
+Settlement and fund returns are simulated. Database atomicity
+covers its own records and does not establish atomicity with
+external bank transfers.
+
+## 5. Worked ledger examples
+
+### Wallet funding: NGN 200,000
 
 | Account | Debit | Credit |
-| :---- | :---- | :---- |
-| NGN platform cash asset | 200,000 | — |
-| Business NGN wallet liability | — | 200,000 |
+| :--- | ---: | ---: |
+| NGN platform cash asset | 200,000 | |
+| Business NGN wallet liability | | 200,000 |
 
-Wallet balance increases by 200,000.
+The wallet balance increases by NGN 200,000.
 
-### **Processing a payout: NGN 50,000**
+### Processing a payout: NGN 50,000
 
 | Account | Debit | Credit |
-| :---- | :---- | :---- |
-| Business NGN wallet liability | 50,000 | — |
-| NGN payout clearing liability | — | 50,000 |
+| :--- | ---: | ---: |
+| Business NGN wallet liability | 50,000 | |
+| NGN payout clearing liability | | 50,000 |
 
-Processing the payout reduces the wallet balance by ₦50,000. When the payout settles, the ledger debits the payout clearing liability account and credits the cash asset account. If the payout fails before settlement and the funds are returned, the system reverses the processing entries to restore the wallet balance.
+Processing reduces the wallet balance by NGN 50,000.
 
-### **Internal FX conversion: NGN 160,000 to USD 120.34**
+Settlement debits clearing and credits platform cash. If processing
+is reversed before settlement, the compensating entries debit
+clearing and credit the wallet liability.
+
+### Internal FX conversion: NGN 160,000 to USD 120.34
 
 | Account | Currency | Debit | Credit |
-| :---- | :---- | :---- | :---- |
-| Business NGN wallet liability | NGN | 160,000 | — |
-| NGN platform FX position account | NGN | — | 160,000 |
-| USD platform FX position account | USD | 120.34 | — |
-| Business USD wallet liability | USD | — | 120.34 |
+| :--- | :--- | ---: | ---: |
+| Business NGN wallet liability | NGN | 160,000 | |
+| NGN platform FX position account | NGN | | 160,000 |
+| USD platform FX position account | USD | 120.34 | |
+| Business USD wallet liability | USD | | 120.34 |
 
-At the reference rate of ₦1,329.5138 per US dollar, ₦160,000 converts to approximately \$120.344745575. The USD wallet receives \$120.34 after rounding to two decimal places. Converting that rounded amount back would not produce exactly ₦160,000.
+At the illustrative sample rate of NGN 1,329.5138 per USD,
+NGN 160,000 converts to approximately USD 120.3447.
 
-The four ledger entries form one transaction. Total NGN debits equal total NGN credits at ₦160,000, while total USD debits equal total USD credits at \$120.34. Each currency is checked separately. These entries record an internal conversion; the prototype excludes external FX settlement.
+The USD wallet receives USD 120.34 after rounding to two decimal
+places. Converting that rounded amount back would not reproduce
+exactly NGN 160,000.
 
-## **6\. Relationships and cardinalities**
+All four entries belong to one ledger transaction.
+NGN debits equal NGN credits, and USD debits equal USD credits.
+Each currency is checked separately.
 
-These describe the intended model. Minimum requirements that need
-routines or triggers are distinguished from the current schema below.
+These entries represent an internal conversion.
+External FX settlement is outside scope.
+
+## 6. Relationships and cardinalities
+
+The distinction below is between the intended operational model
+and the Portfolio 1 base schema.
 
 | Parent → child | Cardinality |
-| :---- | :---- |
+| :--- | :--- |
 | Business → users, wallets, beneficiaries, quotes, payments, conversions and audit events | One to zero or many |
 | Quote → conversion | One to zero or one |
-| Wallet → wallet liability ledger account | Intended: exactly one; current schema: zero or one |
+| Wallet → wallet liability account | Intended: exactly one; base schema permits zero or one |
 | Wallet → payments | One to zero or many |
 | Beneficiary → payments | One to zero or many |
 | User → initiated payments or conversions | One to zero or many |
-| Conversion → ledger transaction | Exactly one; posted status and FX type require additional enforcement |
+| Conversion → ledger transaction | Exactly one reference; posted status and FX type require operational checks |
 | Payment → ledger transactions | One to zero or many |
-| Payment → status-history records | Intended: one or many; current schema permits zero |
-| Ledger transaction → entries | Draft: zero or many; posting must eventually require at least two |
+| Payment → status history | Intended: one or many; base schema permits zero |
+| Ledger transaction → entries | Draft: zero or many; Portfolio 3 posting requires at least two |
 | Ledger account → entries | One to zero or many |
 | Original ledger transaction → full reversal | One to zero or one |
 
 Each conversion references a source wallet and a target wallet.
-Composite foreign keys require both wallets, the quote and the
-initiating user to belong to the conversion's business.
+Composite foreign keys require its wallets, quote and initiating
+user to belong to the conversion's business.
 
-Payment status history and audit events reference user actors when
-applicable. System actors have no user reference. Audit user ownership
-is enforced by a composite foreign key; history user ownership still
-requires additional enforcement.
+History and audit records reference user actors where applicable.
+System actors have no user reference.
 
-Platform ledger accounts may have no wallet. A pending payment may
-have no ledger transactions because creating it does not move money.
+Audit user ownership is enforced by a composite foreign key.
+History actor ownership requires operational checks beyond its
+simple user reference.
 
-## **7\. Enforcement and consistency plan**
+Platform ledger accounts may have no wallet.
+Pending payments may have no ledger transactions because creating
+an instruction does not move funds.
 
-* Use generated integer IDs; monetary amounts NUMERIC(20,2), rates NUMERIC(24,12), timestamps TIMESTAMPTZ and audit details JSONB. Explicitly round conversion results before storing.  
-* PKs, FKs, UNIQUE, NOT NULL and CHECK constraints enforce record existence, allowed values, positive amounts and simple uniqueness.  
-* Composite ownership FKs use parent UNIQUE(id, business\_id) keys where appropriate, so payments/conversions cannot reference another business's records.  
-* Posting and transition routines enforce aggregate balance, approval, role, currency agreement, immutable terms, quote expiry and reversal correctness. Cross-row checks cannot be delegated to ordinary row CHECK constraints.  
-* Restricted application privileges prevent direct writes around these routines. Triggers additionally guard posted records and immutable account properties. Superuser access is outside the application's protection boundary.  
-* Lock payment/quote and affected wallet records. Acquire wallet locks in a consistent wallet-ID order. Recheck sufficient funds and quote expiry after locks. UNIQUE quote\_id prevents reuse; repeated calls must not post duplicate money movements.  
-* Reconcile each wallet.balance with posted credits minus debits; expect zero differences. Include zero-balance wallets with no entries.  
-* Successful financial events and audits are atomic. Failed-attempt audits are written after rollback; losing a failure log must not falsely claim the financial operation succeeded.  
-* No direct negative balance adjustments, edits to posted history or deletion cascades that erase financial records.
+## 7. Enforcement and consistency plan
 
-## **8\. Normalisation rationale**
+- Use generated integer identifiers, `NUMERIC(20,2)` monetary amounts,
+  `NUMERIC(24,12)` rates, `TIMESTAMPTZ` timestamps and `JSONB` audit
+  details. Round conversion results explicitly.
 
-Business details are separated from wallets/users; supplier destinations are separated from payments; quote terms are separated from executed conversions; ledger event details are separated from individual entries. This separation reduces duplication. The normalisation analysis will examine candidate keys and functional dependencies and explain deliberate redundancy, including stored wallet balances and repeated business identifiers.
+- Use primary keys, foreign keys, uniqueness, required fields and
+  checks for record existence, allowed values and row-level rules.
 
-Wallet.balance is deliberately derived data for efficient spending checks. It requires atomic updates and reconciliation. Some business\_id fields are repeated to enforce ownership efficiently; their consistency must be protected by composite relationships. Generic audit references have an explicitly documented integrity limitation.
+- Use composite ownership foreign keys with parent
+  `UNIQUE(id, business_id)` keys where appropriate.
 
-## **9\. Review outcome and current implementation**
+- Use financial routines for aggregate balance, approval, role,
+  currency agreement, quote expiry and reversal correctness.
+  Ordinary row checks cannot enforce all cross-row rules.
 
-The design review clarified platform account types, successful-conversion records, payout-to-ledger relationships, completed-payment reversals, beneficiary protection, completion timestamps and failure auditing.
+- Restrict direct application writes. Use triggers to protect
+  posted records, quote terms and account properties.
 
-All 12 tables have now been created successfully in the separate PostgreSQL database `corridorpay_p1_check`. The original `corridorpay` database currently contains the business, business_user and wallet tables.
+- Lock payment or quote records and affected wallets. Acquire
+  wallet locks in consistent identifier order and recheck funds
+  and quote expiry after waiting.
 
-The full schema was executed against an empty database in one transaction with stop-on-error enabled. A script containing 35 numbered constraint tests was then run. Its successful examples and 25 expected constraint errors were reviewed. The final rollback left all 12 tables empty. SQL scripts, execution transcripts and selected screenshots are saved in the repository.
+- Prevent quote reuse and duplicate financial operations through
+  uniqueness rules and checks under locks.
 
-Currently enforced by the schema:
-- Primary keys, required fields and foreign-key references.
-- Supported currencies, countries, roles and status values.
-- One wallet per currency per business.
+- Reconcile stored wallet balances with posted credits minus
+  debits, including zero-balance wallets without entries.
+
+- Commit successful financial events and audits atomically.
+  Record failed attempts separately after rollback.
+
+- Preserve financial history and avoid deletion cascades that
+  erase financial records.
+
+These protections apply within the documented implementation
+boundary. Privileged administrators can perform actions unavailable
+to the restricted application role.
+
+## 8. Normalisation rationale
+
+Business details are separated from users and wallets.
+Supplier destinations are separated from payments.
+Quote terms are separated from successful conversions.
+Ledger transaction details are separated from individual entries.
+
+The normalisation analysis examines candidate keys, functional
+dependencies and deliberate redundancy.
+
+`wallet.balance` is derived data retained for efficient spending
+checks. Its correctness requires atomic updates and reconciliation.
+
+Repeated business identifiers support ownership enforcement through
+composite foreign keys. Their normalisation trade-offs are explained
+in the separate analysis.
+
+Generic audit references have a documented integrity limitation:
+one foreign key cannot validate identifiers referring to several
+different entity tables.
+
+## 9. Review outcome and implementation checkpoints
+
+### Portfolio 1 structural checkpoint
+
+All 12 tables were created in `corridorpay_p1_check`.
+The base schema ran against an empty database in one transaction
+with stop-on-error enabled.
+
+Its 35 numbered tests produced the reviewed expected outcomes,
+including 25 intentional constraint errors.
+The final rollback left all 12 tables empty.
+
+The base schema enforces:
+
+- Primary and foreign keys.
+- Required fields and supported values.
+- Business ownership references.
+- One wallet per business and currency.
 - Case-insensitive user email uniqueness.
-- Business ownership of payment and conversion references.
-- Positive payment, quote, conversion and ledger-entry amounts.
-- Quote expiry later than creation and a positive rounded target amount.
-- Unique quote and ledger references for conversion records.
-- Wallet-linked ledger accounts classified as liabilities.
-- Payment-history ledger references belonging to the same payment.
-- Audit user ownership, actor rules and JSON-object details.
+- Other documented row-level checks.
 
-Still awaiting routines, triggers or access controls:
-- Business approval and user permission checks.
-- Payment currency agreement and immutable payment instructions.
-- Protection against editing beneficiary destinations already used.
-- Immutable quotes and expiry checks when accepting a quote.
-- Conversion currency matching, calculated amount verification and
-  validation of the linked ledger transaction's type and posted status.
-- Atomic creation of wallets and matching liability accounts.
-- Ledger-controlled balance updates and reconciliation.
-- Balanced posting per currency, posted-record protection and
-  correct compensating reversals.
-- Payout transition enforcement, automatic history creation and
-  prevention of duplicate processing or settlement postings.
-- Append-only history and audit records, history actor ownership,
-  restricted application privileges and row-level security.
+The schema-and-test checkpoint was pushed as commit `0f113a4`.
+The Portfolio 1 guide, ER diagram and normalisation analysis
+are included in the repository.
 
-The FX records in the schema tests are structural examples. They do
-not demonstrate an operational conversion, sufficient-funds checks
-or atomic wallet balance updates.
+### Later Portfolio 3 implementation
 
-Portfolio 1 still requires final document alignment and an organised
-README. Operational financial routines and concurrency demonstrations
-will be developed and tested during Portfolio 3.
+Portfolio 3 subsequently added and tested:
 
-The schema and constraint-test checkpoint was pushed as commit
-`0f113a4`. Portfolio 1 is not yet marked complete.
+- Balanced ledger posting and atomic wallet updates.
+- Protection of posted records and wallet identity fields.
+- Locked sufficient-funds checks and competing-payment handling.
+- Controlled payment processing, simulated settlement and full reversals.
+- Actor, approval, ownership and currency checks in financial routines.
+- Immutable FX quotes and execution-time expiry checks.
+- Calculated conversion amounts and atomic conversion records.
+- Successful financial history and audit records.
+- Duplicate processing and settlement protections.
+- Restricted backend access through controlled financial entry points.
 
-## **10\. References**
+Portfolio 1's conversion records remain structural test examples.
+They do not demonstrate actual conversion or balance movement.
+Operational evidence belongs to Portfolio 3.
 
-Central Bank of Nigeria. NFEM Exchange Rates. Entry dated 25 September 2026: ₦1,329.5138 per US dollar.
+### Remaining boundaries
 
-https\://www\.cbn.gov.ng/rates/ExchRateByCurrency.html
+The dictionary and enforcement plan describe the intended model.
+They do not establish global protection against every privileged write.
 
+The restricted backend cannot directly edit payment instructions,
+beneficiaries, history or audits. Dedicated immutable-payment
+and used-beneficiary triggers have not been implemented.
+
+Wallet/account creation and initial payment history are prepared
+administratively. Application creation routines do not enforce
+these initial relationships.
+
+The generic ledger posting engine checks accounting balance and
+wallet effects. It does not independently enforce every business
+meaning associated with each transaction type. Controlled financial
+routines provide additional operation-specific checks.
+
+Row-level security, tenant-isolated reads and customer authentication
+are not implemented.
+
+Failure auditing after rollback is demonstrated by concurrency
+session B. Other failed routine calls require caller-managed
+failure logging.
+
+See the Portfolio 3 guide for exact routine coverage, tests
+and limitations.
+
+## 10. References
+
+PostgreSQL Global Development Group.
+*PostgreSQL 16: Numeric Types.*
+
+https://www.postgresql.org/docs/16/datatype-numeric.html
+
+The exchange-rate figures in the worked examples are illustrative
+sample values.

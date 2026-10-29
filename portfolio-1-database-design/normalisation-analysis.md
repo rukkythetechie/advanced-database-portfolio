@@ -1,34 +1,63 @@
 # Corridor Pay Normalisation Analysis
 
-This document reviews the Corridor Pay database structure using candidate keys and functional dependencies. All 12 tables have been created and their structural constraints tested in `corridorpay_p1_check`. Operational routines and access controls remain to be implemented.
+## Scope
+
+This document analyses the 12-table base schema tested in
+`corridorpay_p1_check` during Portfolio 1.
+
+Operational routines, transaction tests and restricted application
+permissions were subsequently added in
+[Portfolio 3](../portfolio-3-transactions-concurrency/README.md).
+
+Normalisation conclusions are distinguished from operational
+checks and implementation evidence.
 
 ## 1. Purpose and method
 
-I reviewed the 12 tables using their business rules, candidate keys and functional dependencies. The aim is to reduce unnecessary duplication and avoid conflicting information when records are updated.
+The analysis uses business rules, candidate keys and functional
+dependencies to identify unnecessary duplication and possible
+update inconsistencies.
 
-The following terms are used throughout:
+The following terms are used:
 
-- **Candidate key:** a minimal set of fields that uniquely identifies every row. An optional field marked UNIQUE is not a candidate key for the entire table.
-- **Functional dependency:** X → Y means that rows with the same value of X must have the same value of Y.
-- **1NF:** fields contain individual values, without repeating groups.
-- **2NF:** the table meets 1NF, and no non-prime attribute depends on only part of a candidate key.
-- **3NF:** for every non-trivial dependency X → A, X is a superkey or A belongs to a candidate key.
+- **Candidate key:** a minimal set of attributes identifying every row.
+- **Superkey:** a set of attributes identifying every row, which
+  need not be minimal.
+- **Prime attribute:** an attribute belonging to a candidate key.
+- **Functional dependency:** X → Y means rows agreeing on X
+  must agree on Y.
+- **1NF:** individual field values without repeating groups.
+- **2NF:** 1NF, with no non-prime attribute depending on only
+  part of a candidate key.
+- **3NF:** for every non-trivial dependency X → A, either X
+  is a superkey or A is a prime attribute.
 
-A superkey uniquely identifies a row. An attribute belonging to any candidate key is called a prime attribute. These definitions guide the analysis rather than treating every repeated value as a normalisation violation (University of Waterloo, 2026).
+These definitions distinguish actual dependencies from values
+that merely happen to repeat.
 
-Optional references need particular care. A nullable unique field is not a candidate key for the whole table, but its populated values identify at most one row. PostgreSQL normally allows multiple null values in a unique column (PostgreSQL Global Development Group, n.d.).
+Nullable unique fields require care. They do not identify every
+row and are not candidate keys for the entire table.
+PostgreSQL's default unique constraints permit multiple nulls.
 
-The analysis uses the declared business rules as well as the implemented constraints. Where a rule still needs operational enforcement, that does not mean it has already been verified by the structural tests.
+The analysis considers declared business rules as well as
+implemented constraints. A stated operational rule does not imply
+that Portfolio 1's structural tests verified its enforcement.
 
 ## 2. Overview of findings
 
-Six tables meet 3NF under the stated assumptions. Payment and FX Conversion deliberately depart from strict 3NF by repeating business ownership information. Ledger Account and Ledger Transaction have no established ordinary 3NF violation under the dependencies reviewed. Payment Status History and Audit Event contain conditional redundancy that needs separate explanation.
+Six tables meet 3NF under the stated assumptions.
+Payment and FX Conversion deliberately retain ownership information
+that departs from strict 3NF.
+
+Nullable references and conditional dependencies receive qualified
+assessments rather than an unqualified claim that every table
+is fully normalised.
 
 | Table | Candidate keys | Assessment |
-| :---- | :---- | :---- |
+| :--- | :--- | :--- |
 | Business | business_id; (country_code, registration_number) | 3NF |
-| Business User | user_id; email compared case-insensitively | 3NF |
-| Wallet | wallet_id; (business_id, currency_code) | 3NF within the table; balance is derived from the ledger |
+| Business User | user_id; email under case-insensitive comparison | 3NF |
+| Wallet | wallet_id; (business_id, currency_code) | 3NF within the table; balance is derived from ledger records |
 | Beneficiary | beneficiary_id | 3NF under prototype assumptions |
 | FX Quote | quote_id | 3NF |
 | FX Conversion | conversion_id; quote_id; ledger_transaction_id | 2NF; deliberate ownership-related departure from 3NF |
@@ -36,244 +65,426 @@ Six tables meet 3NF under the stated assumptions. Payment and FX Conversion deli
 | Ledger Account | ledger_account_id | No ordinary 3NF violation established; conditional wallet rules apply |
 | Ledger Transaction | ledger_transaction_id | No ordinary 3NF violation established; reversal consistency rules apply |
 | Ledger Entry | ledger_entry_id | 3NF |
-| Payment Status History | history_id | Conditional redundancy in records with ledger references |
+| Payment Status History | history_id | Conditional redundancy in records with ledger or user references |
 | Audit Event | audit_event_id | Conditional ownership redundancy; JSON context assessed separately |
 
-These conclusions depend on the declared business rules. Additional rules could introduce dependencies that require a fresh analysis.
+These conclusions depend on the stated assumptions.
+Additional business rules may introduce further dependencies.
 
-The composite unique constraints containing an existing primary key, such as `UNIQUE(user_id, business_id)`, support foreign-key references. They are superkeys rather than additional candidate keys because they are not minimal.
+Composite unique constraints containing an existing primary key,
+such as `UNIQUE(user_id, business_id)`, support ownership foreign
+keys. They are superkeys rather than additional candidate keys,
+because they are not minimal.
 
 ## 3. Table-by-table analysis
 
 ### 3.1 Business
 
-The candidate keys are `business_id` and the combination of `country_code` and `registration_number`.
+Candidate keys:
 
-`business_id → business_name, country_code, registration_number, contact_email, kyb_status, created_at`
+- `business_id`
+- `(country_code, registration_number)`
 
-The country-and-registration combination also determines the complete record.
+Dependency:
 
-The table meets 1NF because each field stores an individual value. It meets 2NF because the non-prime attributes depend on the whole of each candidate key, not just the country or registration number.
+`business_id → business_name, country_code, registration_number,
+contact_email, kyb_status, created_at`
 
-Under the stated rules, no non-key determinant introduces a transitive dependency that violates 3NF. Business names and contact emails are not assumed to be unique.
+The country-and-registration combination also determines the
+complete record.
+
+Each field contains an individual value. Non-prime attributes
+depend on the whole composite candidate key, rather than country
+or registration number alone.
+
+Business names and contact emails are not assumed unique.
+No further non-key determinant is asserted.
+
+The table meets 3NF under these rules.
 
 ### 3.2 Business User
 
-The candidate keys are `user_id` and email under case-insensitive comparison. The SQL implementation uses a unique index on `LOWER(email)`.
+Candidate keys:
+
+- `user_id`
+- Email under case-insensitive comparison, implemented through
+  a unique index on `LOWER(email)`.
+
+Dependency:
 
 `user_id → business_id, full_name, email, role, is_active, created_at`
 
-The case-insensitive email key also determines the complete user record.
+The case-insensitive email key also identifies the complete record.
 
-Each user belongs to one business and has one role. The fields contain individual values, meeting 1NF. Neither candidate key has a proper subset on which a non-prime attribute could depend, so the table meets 2NF.
+Each user belongs to one business and has one role.
+The candidate keys have no partial dependencies.
+Business details remain in Business.
 
-Business details remain in Business instead of being repeated for every employee. No non-key field determines another under the stated rules, so the table meets 3NF.
+No non-key field determines another under the stated assumptions.
+The table meets 3NF.
 
-The composite unique constraint on `(user_id, business_id)` supports ownership foreign keys. It is not another candidate key because `user_id` alone already identifies the row.
+`UNIQUE(user_id, business_id)` supports ownership foreign keys.
+It is not minimal because `user_id` already identifies the row.
 
 ### 3.3 Wallet
 
-The candidate keys are `wallet_id` and `(business_id, currency_code)`.
+Candidate keys:
+
+- `wallet_id`
+- `(business_id, currency_code)`
+
+Dependency:
 
 `wallet_id → business_id, currency_code, balance, created_at`
 
-The business-and-currency combination also determines the complete wallet record.
+The business-and-currency combination also identifies the record.
 
-Each row stores one currency and one balance, meeting 1NF. Balance and creation time depend on the whole composite key. Neither the business nor the currency alone identifies these values, so the table meets 2NF.
+Balance and creation time depend on the whole composite key.
+Neither business nor currency alone determines them.
 
-Under the stated rules, Wallet has no transitive dependencies that violate 3NF.
+No transitive dependency violating 3NF is asserted within Wallet.
 
-The stored balance nevertheless duplicates a total calculated from posted ledger entries. This is cross-table redundancy, not automatically a 3NF violation within Wallet. Atomic posting routines and reconciliation are planned to keep it consistent with the ledger; they are not yet implemented.
+The stored balance nevertheless duplicates a total calculated from
+posted ledger entries. This is cross-table derived information,
+rather than automatically a 3NF violation within Wallet.
+
+Portfolio 3 implements atomic posting and demonstrates reconciliation
+between stored balances and posted ledger totals.
 
 ### 3.4 Beneficiary
 
-The only declared candidate key is `beneficiary_id`.
+Candidate key:
 
-`beneficiary_id → business_id, beneficiary_name, country_code, currency_code, bank_name, account_reference, routing_reference, created_at`
+- `beneficiary_id`
 
-Each record represents one receiving account with individual field values, meeting 1NF. The single-attribute key has no partial dependencies, so the table meets 2NF.
+Dependency:
 
-For this prototype, bank names and routing references are treated as saved destination details. The design does not assume that a routing reference determines a standard bank record. Under these assumptions, no transitive dependencies are asserted, and the table meets 3NF.
+`beneficiary_id → business_id, beneficiary_name, country_code,
+currency_code, bank_name, account_reference, routing_reference,
+created_at`
 
-Bank-account details are not candidate keys. Different businesses can save the same destination, and duplicates within a business have not been prohibited.
+Each row represents one receiving account. Its single-attribute
+candidate key has no partial dependencies.
 
-The composite unique constraints containing `beneficiary_id` support ownership and currency references. They are not minimal keys.
+Bank names and routing details are treated as saved destination
+information. The prototype does not assume a routing reference
+determines a standard bank-directory record.
 
-If bank-directory rules are introduced later, their dependencies will need to be analysed separately.
+Under these assumptions, the table meets 3NF.
+
+Bank details are not candidate keys. Different businesses may
+save the same destination, and duplicates within a business
+have not been prohibited.
+
+Composite unique constraints containing `beneficiary_id` support
+foreign keys but are not minimal keys.
+
+Introducing a bank directory would require a fresh dependency analysis.
 
 ### 3.5 FX Quote
 
-The only declared candidate key is `quote_id`.
+Candidate key:
 
-`quote_id → business_id, source_currency, target_currency, source_amount, exchange_rate, created_at, expires_at`
+- `quote_id`
 
-Each row records one offer using individual values, meeting 1NF. Its single-attribute key has no partial dependencies, so it meets 2NF.
+Dependency:
 
-The currency pair does not determine the rate because quotes for the same currencies may offer different rates. Creation time does not determine expiry because a fixed quote duration has not been imposed.
+`quote_id → business_id, source_currency, target_currency,
+source_amount, exchange_rate, created_at, expires_at`
 
-No transitive dependencies are asserted under these rules, so the table meets 3NF.
+The single-attribute key has no partial dependencies.
+
+A currency pair does not determine its rate because different
+quotes may offer different rates. Creation time does not determine
+expiry because a fixed quote duration is not imposed.
+
+No further transitive dependencies are asserted.
+The table meets 3NF.
 
 ### 3.6 FX Conversion
 
-The candidate keys are `conversion_id`, `quote_id` and `ledger_transaction_id`. Each is required and unique.
+Candidate keys:
 
-`conversion_id → quote_id, business_id, source_wallet_id, target_wallet_id, initiated_by, target_amount, ledger_transaction_id, completed_at`
+- `conversion_id`
+- `quote_id`
+- `ledger_transaction_id`
 
-Each of the other candidate keys also determines the complete record.
+All three are required and unique.
 
-The table meets 1NF. All candidate keys are single attributes, so there are no partial dependencies, and it meets 2NF.
+Dependency:
 
-Each source wallet, target wallet and initiating user belongs to one business. Their references therefore determine `business_id`, but they are not superkeys of FX Conversion because they may appear in many conversions.
+`conversion_id → quote_id, business_id, source_wallet_id,
+target_wallet_id, initiated_by, target_amount,
+ledger_transaction_id, completed_at`
 
+Each other candidate key also identifies the complete record.
+
+All candidate keys are single attributes, so the table has
+no partial dependencies and meets 2NF.
+
+Each wallet and initiating user belongs to one business.
 For example:
 
 `source_wallet_id → business_id`
 
-The determinant is not a superkey, and `business_id` is not prime. The table therefore deliberately departs from strict 3NF by retaining explicit business ownership.
+A source wallet may appear in many conversions, so it is not
+a superkey of FX Conversion. `business_id` is not prime.
 
-Composite foreign keys enforce agreement between the conversion's business ID and its linked quote, wallets and initiating user.
+Retaining explicit business ownership therefore deliberately
+departs from strict 3NF.
 
-Under the intended calculation rule, the rounded `target_amount` is determined by the accepted quote. Since `quote_id` is a candidate key, storing that result does not itself violate 3NF. Verification that the stored amount matches the quote calculation still requires additional enforcement.
+Composite foreign keys ensure agreement between the conversion's
+business and its quote, wallets and initiating user.
+
+Under the calculation rule, the accepted quote determines the
+rounded target amount. Because `quote_id` is a candidate key,
+storing that result does not itself violate 3NF.
+
+Portfolio 3's conversion routine calculates the amount and
+enforces the operational checks.
 
 ### 3.7 Payment
 
-The only declared candidate key is `payment_id`.
+Candidate key:
 
-`payment_id → business_id, wallet_id, beneficiary_id, initiated_by, amount, status, created_at, completed_at`
+- `payment_id`
 
-Each row represents one instruction with individual values, meeting 1NF. Its single-attribute key has no partial dependencies, so it meets 2NF.
+Dependency:
 
-The wallet, beneficiary and initiating user each determine the business they belong to. None uniquely identifies a payment because each may appear in many payments.
+`payment_id → business_id, wallet_id, beneficiary_id,
+initiated_by, amount, status, created_at, completed_at`
 
-For example:
+The single-attribute key has no partial dependencies.
+The table meets 2NF.
+
+Its wallet, beneficiary and initiating user each determine
+their business. For example:
 
 `wallet_id → business_id`
 
-Keeping `business_id` therefore creates transitive dependencies and deliberately departs from strict 3NF. Composite foreign keys enforce consistent payment ownership.
+A wallet may appear in many payments and is not a superkey.
+The repeated `business_id` therefore creates a deliberate
+departure from strict 3NF.
 
-Keeping the current status alongside a separate status history also requires coordinated updates. That is an integrity requirement rather than an additional normal-form conclusion. Atomic status and history updates are not yet implemented.
+Composite foreign keys enforce consistent ownership.
+
+Keeping current status alongside status history requires coordinated
+updates. This is a cross-table integrity requirement.
+Portfolio 3 implements atomic updates for its controlled
+payment routines.
 
 ### 3.8 Ledger Account
 
-The only unconditional candidate key is `ledger_account_id`.
+Unconditional candidate key:
 
-`ledger_account_id → account_name, account_type, currency_code, wallet_id, created_at`
+- `ledger_account_id`
 
-Although `wallet_id` is unique when present, platform accounts leave it empty. It is not a candidate key for the whole table.
+Dependency:
 
-The ordinary fields hold individual values, and the single unconditional key has no partial dependencies.
+`ledger_account_id → account_name, account_type,
+currency_code, wallet_id, created_at`
 
-For populated wallet references, uniqueness ensures that a wallet identifies at most one ledger-account row. Therefore, the wallet's currency and required liability classification do not, by themselves, establish a non-key dependency across multiple account rows.
+Although `wallet_id` is unique when present, platform accounts
+leave it empty. It is not a candidate key for the whole table.
 
-No ordinary 3NF violation has been established from the stated dependencies. Conditional integrity rules still apply.
+The single unconditional candidate key has no partial dependencies.
 
-The liability classification for wallet-linked accounts is enforced by a CHECK constraint. Matching wallet currency, protecting the wallet association and ensuring every wallet has an account require additional enforcement.
+A populated wallet reference identifies at most one account row.
+The wallet's currency and liability classification do not, by
+themselves, establish a non-key dependency across multiple
+account rows.
+
+No ordinary 3NF violation is established from the reviewed
+dependencies. Conditional integrity rules still apply.
+
+The base schema requires wallet-linked accounts to be liabilities.
+Portfolio 3 adds wallet currency matching and association protections.
+
+Ensuring every wallet is created with an account remains an
+administrative setup responsibility in the demonstrations.
 
 ### 3.9 Ledger Transaction
 
-The only unconditional candidate key is `ledger_transaction_id`.
+Unconditional candidate key:
 
-`ledger_transaction_id → transaction_type, description, status, payment_id, reversal_of_transaction_id, created_at, posted_at`
+- `ledger_transaction_id`
 
-The optional reversal reference is unique when present, but it does not identify every row.
+Dependency:
 
-Each row records one financial event, with entries stored separately, meeting 1NF. The single unconditional key has no partial dependencies.
+`ledger_transaction_id → transaction_type, description,
+status, payment_id, reversal_of_transaction_id,
+created_at, posted_at`
 
-For a reversal, the intended rule is that the original transaction establishes which payment is being reversed. However, when populated, the original reference is unique, so it identifies at most one reversal row.
+The optional reversal reference is unique when populated but
+does not identify every row.
 
-No ordinary 3NF violation has been established from that reference. Agreement between the reversal's payment ID and the original transaction's payment ID still requires enforcement.
+Entries are stored separately, avoiding repeating entry groups.
+The single unconditional key has no partial dependencies.
 
-Checking balanced debits and credits is a separate financial correctness requirement.
+For a reversal, the original transaction establishes the related
+payment. However, the populated original reference identifies
+at most one reversal row because it is unique.
+
+No ordinary 3NF violation is established from that reference.
+Agreement between the original and reversal payment references
+remains an integrity requirement.
+
+Balanced posting and correct reversal entries are financial
+correctness requirements, separate from normalisation.
+Portfolio 3 addresses these through posting protections
+and controlled reversal logic.
 
 ### 3.10 Ledger Entry
 
-The only declared candidate key is `ledger_entry_id`.
+Candidate key:
 
-`ledger_entry_id → ledger_transaction_id, ledger_account_id, entry_type, amount`
+- `ledger_entry_id`
 
-Each row records one debit or credit, meeting 1NF. Its single-attribute key has no partial dependencies, so it meets 2NF.
+Dependency:
 
-Currency is obtained from Ledger Account, while financial-event details remain in Ledger Transaction. Neither is repeated in each entry.
+`ledger_entry_id → ledger_transaction_id,
+ledger_account_id, entry_type, amount`
 
-There are no transitive dependencies between the stored non-key fields under the stated rules, so the table meets 3NF.
+Each row records one debit or credit.
+Its single-attribute key has no partial dependencies.
 
-The transaction-and-account combination is not assumed unique. A transaction may contain several entries affecting the same account.
+Currency is obtained from Ledger Account. Financial-event details
+remain in Ledger Transaction.
+
+No transitive dependencies between stored non-key fields are
+asserted. The table meets 3NF.
+
+The transaction-and-account combination is not assumed unique:
+a transaction may contain several entries affecting one account.
 
 ### 3.11 Payment Status History
 
-The only declared candidate key is `history_id`.
+Candidate key:
 
-`history_id → payment_id, from_status, to_status, changed_at, actor_type, changed_by, reason, ledger_transaction_id`
+- `history_id`
 
-Each row records one status event with individual values. The single-attribute key has no partial dependencies.
+Dependency:
+
+`history_id → payment_id, from_status, to_status,
+changed_at, actor_type, changed_by, reason,
+ledger_transaction_id`
+
+Each row represents one event. Its single-attribute candidate
+key has no partial dependencies.
 
 Within records containing payout ledger references:
 
 `ledger_transaction_id → payment_id`
 
-Unlike the wallet reference in Ledger Account, this ledger reference is not declared unique. The same posting could therefore appear in multiple history records, repeating the payment it identifies.
+The ledger reference is not unique within history. Multiple
+history rows could repeat the payment identified by one posting.
 
-The design retains `payment_id` so every event directly identifies its payment, including events without ledger postings. A composite foreign key ensures that a linked ledger transaction belongs to the same payment.
+The table retains `payment_id` so every event directly identifies
+its payment, including events without postings.
+A composite foreign key ensures a linked transaction belongs
+to that same payment.
 
-Within user-triggered records, the actor rules also mean:
+Within user-triggered records:
 
 `changed_by → actor_type`
 
-This applies only to the subset with populated user references. System events have no `changed_by` value.
+This dependency applies to the subset containing user references.
+System events have no `changed_by` value.
 
-These conditional dependencies need separate treatment rather than an unqualified strict-3NF claim. The previous and new statuses describe the event; neither status alone determines its timestamp, actor or reason.
+These conditional dependencies warrant a qualified assessment,
+rather than an unqualified strict-3NF claim.
+
+Neither previous nor new status alone determines the event's
+timestamp, actor or reason.
 
 ### 3.12 Audit Event
 
-The only declared candidate key is `audit_event_id`.
+Candidate key:
 
-`audit_event_id → business_id, actor_type, actor_user_id, action, entity_type, entity_id, outcome, details, occurred_at`
+- `audit_event_id`
 
-The ordinary columns store individual event attributes, and the single-attribute key has no partial dependencies.
+Dependency:
+
+`audit_event_id → business_id, actor_type, actor_user_id,
+action, entity_type, entity_id, outcome, details, occurred_at`
+
+The ordinary columns describe one event.
+The single-attribute candidate key has no partial dependencies.
 
 Within user-triggered events:
 
 `actor_user_id → business_id, actor_type`
 
-One user may trigger many events, so the repeated business ID introduces conditional ownership redundancy. It is retained so both user-triggered and system-triggered events directly identify the business concerned.
+A user may trigger many events. Repeating their business therefore
+introduces conditional ownership redundancy.
 
-A composite foreign key enforces agreement between the audit event's business and its user actor. The actor CHECK constraint requires user references for user actors and no user reference for system actors.
+The business reference is retained so both user and system events
+directly identify the business concerned.
 
-The JSON details field stores flexible event context. Its internal structure is not analysed as a fully normalised set of relational attributes. The use of JSON alone does not establish a 3NF violation.
+A composite foreign key enforces agreement between the business
+and user actor. Checks require a user reference for user actors
+and no user reference for system actors.
 
-The audit table therefore receives a qualified assessment that separates ownership redundancy from its structured event context.
+JSON details hold flexible event context. Their internal structure
+is not analysed as a fully normalised set of relational attributes.
+Using JSON does not, by itself, establish a 3NF violation.
+
+The assessment therefore distinguishes conditional ownership
+redundancy from structured event context.
 
 ## 4. Repeated and calculated data
 
-Some information is retained for practical reasons. Each choice needs an appropriate consistency control.
+Each retained duplication or calculated value needs an appropriate
+consistency control.
 
-| Retained information | Tables | Consistency control |
-| :---- | :---- | :---- |
-| Explicit business_id | Payment and FX Conversion | Implemented composite foreign keys |
-| Stored wallet balance | Wallet | Atomic posting and reconciliation; pending |
-| Wallet currency and liability classification | Ledger Account | Liability check implemented; wallet currency matching pending |
-| Payment reference on reversals | Ledger Transaction | Agreement with the original transaction; pending |
-| Payment reference alongside a ledger link | Payment Status History | Implemented composite foreign key |
-| Current status and status history | Payment and Payment Status History | Atomic updates; pending |
-| Business reference for user actors | Audit Event | Implemented composite foreign key |
-| Flexible event context | Audit Event | JSON-object check implemented; sensitive-data restrictions pending |
+| Retained information | Tables | Consistency control and status |
+| :--- | :--- | :--- |
+| Explicit business_id | Payment and FX Conversion | Composite foreign keys in the base schema |
+| Stored wallet balance | Wallet | Atomic posting and reconciliation demonstrated in Portfolio 3 |
+| Wallet currency and liability classification | Ledger Account | Base liability check; Portfolio 3 currency and association protections |
+| Payment reference on reversals | Ledger Transaction | Controlled reversal checks in Portfolio 3 |
+| Payment reference alongside ledger link | Payment Status History | Composite foreign key in the base schema |
+| Current status and status history | Payment and Payment Status History | Atomic changes in Portfolio 3 controlled routines |
+| Business reference for user actors | Audit Event | Composite foreign key in the base schema |
+| Flexible event context | Audit Event | Base JSON-object check; no general sensitive-content filtering implemented |
 
-These items are not all the same kind of normalisation issue. Some are established transitive dependencies, some apply only to particular records, and others are cross-table calculations or integrity rules.
+These are different kinds of design concern.
+Some are transitive dependencies, some apply only to subsets
+of records, and others are cross-table calculations or integrity
+requirements.
+
+Operational routines and permissions do not remove the underlying
+redundancy. They help keep the retained information consistent.
 
 ## 5. Limits of this analysis
 
-Normalisation does not establish that a user has permission, a wallet has sufficient funds, a quote is unexpired at execution or a ledger transaction balances.
+Normalisation does not establish that:
 
-The full schema has been built successfully, and the structural test results have been reviewed. This does not establish that operational financial rules are enforced. Posting routines, permissions, concurrency control and reconciliation require separate implementation and testing.
+- A user has permission to perform an operation.
+- A wallet has sufficient funds.
+- A quote remains unexpired when executed.
+- A ledger transaction balances.
+- Concurrent transactions cannot overspend a wallet.
 
-The deliberate departures from strict 3NF are documented rather than presented as fully normalised tables. Composite foreign keys protect ownership consistency, but the retained redundancy remains part of the design.
+Portfolio 1's evidence establishes captured structural behaviour.
+Portfolio 3 provides separate evidence for financial routines,
+rollback, access restrictions and concurrent wallet operations.
+
+The deliberate departures from strict 3NF are documented.
+Composite foreign keys protect ownership consistency, but the
+retained redundancy remains part of the design.
+
+The conclusions are limited to the stated dependencies and
+prototype assumptions.
 
 ## 6. References
 
-University of Waterloo. *Data Dependencies and Normal Forms*, CS 348, Winter 2026.
+University of Waterloo.
+*Data Dependencies and Normal Forms*, CS 348, Winter 2026.
 
 https://cs.uwaterloo.ca/~david/cs348/handout-FD.pdf
 
-PostgreSQL Global Development Group. *PostgreSQL Documentation: Constraints*.
+PostgreSQL Global Development Group.
+*PostgreSQL 16 Documentation: Constraints.*
 
-https://www.postgresql.org/docs/current/ddl-constraints.html
+https://www.postgresql.org/docs/16/ddl-constraints.html

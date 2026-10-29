@@ -287,3 +287,26 @@ MongoDB documentation:
 - [Schema Validation](https://www.mongodb.com/docs/manual/core/schema-validation/)
 - [JSON Schema Validation Tips, version 7.0](https://www.mongodb.com/docs/v7.0/core/schema-validation/specify-json-schema/json-schema-tips/)
 - [Compound Indexes](https://www.mongodb.com/docs/manual/core/indexes/index-types/index-compound/create-compound-index/)
+## Final review corrections
+
+The demonstration script was corrected to use mongosh's direct
+projection argument when excluding the internal `_id` field.
+
+The duplicate-event test now supplies a fresh `_id` and checks
+that rejection comes from the `event_id_unique` index.
+
+A focused verification against the existing sample collection
+confirmed that:
+
+- All six original audit events were present.
+- The projection excluded `_id`.
+- The duplicate-test fixture existed.
+- The event identifier index rejected a duplicate with a fresh `_id`.
+- All six original audit events remained afterwards.
+
+The verification output is saved in
+`evidence/mongodb-review-check.txt`.
+
+The original demonstration transcript and screenshots are retained
+as evidence of the earlier run. The focused verification records
+the subsequent corrections without rerunning the full demonstration.
