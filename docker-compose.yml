@@ -9,7 +9,7 @@ services:
     container_name: corridor-pg
     environment:
       POSTGRES_USER: corridor
-      POSTGRES_PASSWORD: corridor_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: corridorpay
     ports:
       - "5432:5432"

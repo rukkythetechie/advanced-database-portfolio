@@ -79,22 +79,34 @@ The practical exercises use Docker Desktop with:
 - PostgreSQL container: corridor-pg.
 - MongoDB container: corridor-mongo.
 
-Captured evidence records PostgreSQL 16.15 and MongoDB 7.0.43.
-Image tags may resolve to different minor versions when pulled later.
+Captured versions were PostgreSQL 16.15 and MongoDB 7.0.43.
 
-To start the existing containers:
+### Fresh installation
 
-```bash
-docker start corridor-pg corridor-mongo
-```
+From the repository folder, copy the example configuration:
+
+    cp .env.example .env
+
+Open .env locally and replace the password placeholder with
+your own password. Then create and start the containers:
+
+    docker compose up -d
+
+The .env file is excluded from Git and must not be uploaded.
+For an existing database, editing .env alone does not change
+the database password.
+
+### Existing containers
+
+Start containers that have already been created:
+
+    docker start corridor-pg corridor-mongo
 
 Follow each portfolio's guide for database names, installation
-order, test commands and expected results. Several scripts require
-an empty database or fixtures created by an earlier demonstration.
+order, test commands and expected results.
 
-The original corridorpay database contains the initial three-table
-implementation. Full-schema exercises use separate databases,
-including corridorpay_p1_check, corridorpay_p2 and corridorpay_p3.
+Full-schema exercises use separate databases, including
+corridorpay_p1_check, corridorpay_p2 and corridorpay_p3.
 
 MongoDB Portfolio 4 uses corridorpay_p4 and standalone sample
 audit events. It is not synchronized with PostgreSQL.
